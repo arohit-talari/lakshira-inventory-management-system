@@ -27,17 +27,19 @@ A production textile business was running entirely on a hand-edited Google Sheet
 
 ## Tech stack
 
-| Layer | Tool |
-|---|---|
-| System of record | Google Sheets, via `gspread` |
-| CLI / business logic | Python (`questionary` for interactive prompts, `phonenumbers` for validated international phone entry) |
-| Currency conversion | Live ECB historical exchange rates via the Frankfurter API |
-| Reporting | `reportlab` (PDF generation), Claude API (AI-written executive summary) |
-| Data warehouse | ETL pipeline → AWS RDS (MySQL) |
-| Analytics / dashboards | Tableau, direct SQL queries |
-| Scheduling | macOS `launchd` (automated monthly/quarterly/annual report generation) |
-| Testing | `pytest`, `pexpect` (drives the real interactive CLI through a pty) |
-| Spreadsheet/legacy interchange | Excel |
+| Layer | Tool | In this repo? |
+|---|---|---|
+| System of record | Google Sheets, via `gspread` | ✅ |
+| CLI / business logic | Python (`questionary` for interactive prompts, `phonenumbers` for validated international phone entry) | ✅ |
+| Currency conversion | Live ECB historical exchange rates via the Frankfurter API | ✅ |
+| Reporting | `reportlab` (PDF generation), Claude API (AI-written executive summary) | ✅ |
+| Scheduling | macOS `launchd` (automated monthly/quarterly/annual report generation) | ✅ |
+| Testing | `pytest`, `pexpect` (drives the real interactive CLI through a pty) | ✅ |
+| Data warehouse | ETL pipeline → AWS RDS (MySQL) | Downstream — separate repo |
+| Analytics / dashboards | Tableau, direct SQL queries | Downstream — separate repo |
+| Spreadsheet/legacy interchange | Excel | Source data only, not code here |
+
+Only the checked rows have code in this repository. The downstream ETL/MySQL/Tableau layers are real and built, but live in a separate project — included above for full-pipeline context, not implied to be part of this codebase.
 
 ## The system: 10 operations
 
