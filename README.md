@@ -117,6 +117,7 @@ report_config.py          # reporting configuration (fonts, brand colors, secret
 scheduler.py              # automated report scheduling (macOS launchd)
 tests/                    # 205 tests across both tiers
 ARCHITECTURE.md           # data model, SKU logic, currency handling, per-operation detail
+STAKEHOLDER_DISCOVERY.md  # the requirements-gathering framework that shaped every decision above
 ```
 
 ---
