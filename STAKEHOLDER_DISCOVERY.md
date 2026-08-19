@@ -2,7 +2,7 @@
 
 **Business Analyst Interview Guide**
 
-This is the question framework used to run a combined stakeholder discovery and requirements-gathering session ahead of the Lakshira Inventory Management System build — the process behind [ARCHITECTURE.md](ARCHITECTURE.md), not just its output.
+This is the question framework used to run a combined stakeholder discovery and requirements-gathering session, stage 1 of the full [Lakshira project](README.md) and the process behind [ARCHITECTURE.md](ARCHITECTURE.md), not just its output.
 
 The stakeholder's actual answers are not included here. They contain real financial figures, customer and supplier specifics, and other business-confidential detail that isn't appropriate to publish. What's shown is the methodology: how the conversation was structured to move from "how does this business actually work today" to "what does a system need to do about it," in a single session appropriate to a one-person engagement with a single decision-maker.
 
