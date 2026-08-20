@@ -1,14 +1,14 @@
 # Lakshira Inventory Management System
 
-*Part of the [Lakshira project](README.md) — this is the deep dive on the operational-system stage specifically. Start at the main README for the full lifecycle: discovery, data foundation, warehouse, BI, and this system.*
+*Part of the [Lakshira project](README.md). This is the deep dive on the operational-system stage specifically; start at the main README for the full lifecycle: discovery, data foundation, warehouse, BI, and this system.*
 
-A terminal-based inventory, sales, and business-intelligence system built for Lakshira Handwoven Weaves, a small handloom textile business — replacing manual spreadsheet editing with a guided, validated CLI.
+A terminal-based inventory, sales, and business-intelligence system built for Lakshira Handwoven Weaves, a small handloom textile business, replacing manual spreadsheet editing with a guided, validated CLI.
 
-Built almost entirely in collaboration with **Claude Code** — every design decision, bug fix, and test in this repo was driven through an actual multi-week working session with an AI pair-programmer, not a one-shot generation. The commit history and the testing section below reflect that iterative process directly.
+Built almost entirely in collaboration with **Claude Code**: every design decision, bug fix, and test in this repo was driven through a multi-week working session with an AI pair-programmer, not a one-shot generation. The commit history and the testing section below reflect that iterative process directly.
 
 ## Why this exists
 
-A production textile business was running entirely on a hand-edited Google Sheet: no validation, no audit trail, error-prone manual entry, and no way to answer basic questions like "what's our margin trending toward" without opening a spreadsheet and doing math by hand. This system is a lightweight, purpose-built alternative to a commercial ERP/CRM — most small businesses reach for QuickBooks, Zoho, or a Shopify+spreadsheet combo; this does the equivalent job (inventory lifecycle, sales pipeline, customer relationship history, financial reporting) shaped exactly around how this specific business actually operates, at a fraction of the integration cost.
+A production textile business was running entirely on a hand-edited Google Sheet: no validation, no audit trail, error-prone manual entry, and no way to answer basic questions like "what's our margin trending toward" without opening a spreadsheet and doing math by hand. This system is a lightweight, purpose-built alternative to a commercial ERP/CRM. Most small businesses reach for QuickBooks, Zoho, or a Shopify-plus-spreadsheet combo; this does the equivalent job (inventory lifecycle, sales pipeline, customer relationship history, financial reporting) shaped around how this specific business operates, at a fraction of the integration cost.
 
 ## Tech stack
 
@@ -19,7 +19,7 @@ A production textile business was running entirely on a hand-edited Google Sheet
 | Currency conversion | Live ECB historical exchange rates via the Frankfurter API |
 | Reporting | `reportlab` (PDF generation), Claude API (AI-written executive summary) |
 | Scheduling | macOS `launchd` (automated monthly/quarterly/annual report generation) |
-| Testing | `pytest`, `pexpect` (drives the real interactive CLI through a pty) |
+| Testing | `pytest`, `pexpect` (drives the interactive CLI through a pty) |
 
 This is the operational-system stage's own stack. The data warehouse (MySQL/AWS RDS) and BI layer (Tableau) that this system feeds are covered in the [main README](README.md), not duplicated here.
 
@@ -31,21 +31,21 @@ Every write operation follows the same guided shape: look up → validate eligib
 
 ## Requirements validation and UAT
 
-Before this system could be trusted with real customer and financial data, it had to prove it actually solved the business's problem, not just that the code ran. Validation was run as a structured UAT process: 355 defects identified against real business workflows and stakeholder-observed scenarios, each classified by business risk rather than technical severity (23 rated Critical), and each traced back to a specific requirement or a specific gap in how the manual process previously worked. That process, not the code itself, is what turned this from a working script into a system the business could actually depend on.
+Before this system could be trusted with real customer and financial data, it had to prove it actually solved the business's problem. Passing code wasn't the bar. Validation was run as a structured UAT process: 355 defects identified against business workflows and stakeholder-observed scenarios, each classified by business risk rather than technical severity (23 rated Critical), and each traced back to a specific requirement or a specific gap in how the manual process previously worked. That process, not the code itself, is what turned this from a working script into a system the business could actually depend on.
 
 **A two-tier, 205-test automated regression suite locks each resolved defect in place:**
 - **130 tests** validating core business logic (pricing calculations, date/aging rules, report metrics) in isolation
 - **75 tests** driving the full guided workflow end-to-end against a live test environment, covering all 10 operations: correct-path completion, appropriate rejection of invalid states, validation-error handling, and cancellation paths
 
 **Validation coverage:**
-- **Functional** — every operation's core flow, verified against real data state after each write
-- **Edge case / real-world data conditions** — currency values formatted the way the business actually enters them, below-cost pricing, incomplete cost/price data, discount edge cases, four-figure outstanding balances
-- **Regression** — every defect below is locked behind a dedicated test, so a resolved issue can't silently reappear
-- **Stakeholder UAT** — email delivery and generated report content were verified directly by the business owner against production data, both the live system of record and the independent data warehouse, not just automated checks
+- **Functional**: every operation's core flow, verified against data state after each write
+- **Edge case / real-world data conditions**: currency values formatted the way the business actually enters them, below-cost pricing, incomplete cost/price data, discount edge cases, four-figure outstanding balances
+- **Regression**: every defect below is locked behind a dedicated test, so a resolved issue can't silently reappear
+- **Stakeholder UAT**: email delivery and generated report content were verified directly by the business owner against production data, both the live system of record and the independent data warehouse, beyond automated checks alone
 
 **Concurrency risk, identified and resolved:** because more than one person can act on the same inventory record at once, every write was required to detect and reject a conflicting concurrent change rather than silently overwrite it, verified directly with two simultaneous sessions attempting to edit the same unit.
 
-**Real defects this process surfaced, each now closed with a permanent regression test:**
+**Defects this process surfaced, each now closed with a permanent regression test:**
 - A repricing workflow that failed on every attempt, traced to a business-logic gap in how one pricing path was handled
 - A confirmation step that completed with no feedback to the user, masking whether the action had actually happened
 - A payment-tracking flow that broke on realistic transaction amounts (any outstanding balance of $1,000 or more), a defect invisible until tested against real business scale
@@ -56,21 +56,21 @@ Before this system could be trusted with real customer and financial data, it ha
 
 The validation effort above was run as a structured DMAIC cycle, the same framework used to drive process improvement on the business side of this engagement, applied here to closing the gap between the manual process and the delivered system:
 
-- **Define** — the manual, hand-edited spreadsheet was the source of the defects being eliminated: no validation, no audit trail, silent data-entry errors, no repeatable reporting process.
-- **Measure** — 355 defects identified and prioritized by business risk (23 Critical), against a 205-test suite establishing a real, repeatable baseline instead of ad hoc spot-checks.
-- **Analyze** — every defect was root-caused against the actual business workflow it broke, not patched at the symptom. A reporting mismatch, for example, was traced back to specific incomplete source records rather than written off as noise.
-- **Improve** — each defect resolved at its root cause, with the underlying process changed so the same class of issue can't recur, not just the immediate instance fixed.
-- **Control** — every fix locked behind a permanent regression test, re-run before any future change, functioning as this project's control mechanism in place of a physical control chart.
+- **Define**: the manual, hand-edited spreadsheet was the source of the defects being eliminated: no validation, no audit trail, silent data-entry errors, no repeatable reporting process.
+- **Measure**: 355 defects identified and prioritized by business risk (23 Critical), against a 205-test suite establishing a repeatable baseline instead of ad hoc spot-checks.
+- **Analyze**: every defect was root-caused against the actual business workflow it broke, never just patched at the symptom. A reporting mismatch, for example, was traced back to specific incomplete source records rather than written off as noise.
+- **Improve**: each defect resolved at its root cause, with the underlying process changed so the same class of issue can't recur. Fixing the immediate instance alone wasn't the goal.
+- **Control**: every fix locked behind a permanent regression test, re-run before any future change, functioning as this project's control mechanism in place of a physical control chart.
 
-**Specific Lean Six Sigma tools applied, not just DMAIC as a label:**
+**Specific Lean Six Sigma tools applied here, beyond DMAIC as a label:**
 
-- **Poka-yoke (mistake-proofing)** — every constrained business field (status, category, weave type, sales channel) is a validated pick-list, never free text. An entire class of data-entry defect is made structurally impossible, not just discouraged.
-- **Standardized work** — all 10 operations follow an identical look-up → validate → collect → confirm → commit pattern, so the system behaves predictably for a non-technical user regardless of which task they're performing.
-- **Waste elimination (Muda)** — manual cross-referencing and calculation (motion/waiting waste) replaced by automation; recurring data-entry defects (defect waste) prevented at the point of entry; a report that once required manually compiling numbers across tabs now generates on demand.
-- **Root cause analysis** — every defect traced to its actual origin in the business process before a fix was specified, not just to its symptom.
-- **Kaizen (continuous improvement)** — the system evolved through repeated audit → fix → validate cycles across the engagement, not one large rewrite.
+- **Poka-yoke (mistake-proofing)**: every constrained business field (status, category, weave type, sales channel) is a validated pick-list, never free text. An entire class of data-entry defect is made structurally impossible, no longer just discouraged.
+- **Standardized work**: all 10 operations follow an identical look-up → validate → collect → confirm → commit pattern, so the system behaves predictably for a non-technical user regardless of which task they're performing.
+- **Waste elimination (Muda)**: manual cross-referencing and calculation (motion/waiting waste) replaced by automation; recurring data-entry defects (defect waste) prevented at the point of entry; a report that once required manually compiling numbers across tabs now generates on demand.
+- **Root cause analysis**: every defect traced to its actual origin in the business process before a fix was specified, never just its symptom.
+- **Kaizen (continuous improvement)**: the system evolved through repeated audit → fix → validate cycles across the engagement rather than one large rewrite.
 
-The implementation itself, how each fix was actually written into the codebase, was directed AI-assisted development through Claude Code, reviewed and validated at every step against the criteria above; see the repository code and test suite for that layer directly.
+The implementation itself, how each fix was written into the codebase, was directed AI-assisted development through Claude Code, reviewed and validated at every step against the criteria above; see the repository code and test suite for that layer directly.
 
 ## Running it
 
@@ -106,4 +106,4 @@ STAKEHOLDER_DISCOVERY.md  # the requirements-gathering framework that shaped eve
 
 ---
 
-*Real supplier and customer data are not included anywhere in this repo — the system's only data store is Google Sheets (and, downstream, the business's own MySQL warehouse), never this codebase. Specific business findings and figures from the engagement are documented in a private report for the client instead of published here, standard confidentiality practice for a real, operating business, not a reflection on the work or its results. A few reference values (e.g. the supplier list) are seeded with placeholder data of the same shape as production for demonstration purposes.*
+*Supplier and customer data are not included anywhere in this repo. The system's only data store is Google Sheets (and, downstream, the business's own MySQL warehouse), never this codebase. Specific business findings and figures from the engagement are documented in a private report for the client instead of published here, standard confidentiality practice for an operating business, not a reflection on the work or its results. A few reference values (e.g. the supplier list) are seeded with placeholder data of the same shape as production for demonstration purposes.*

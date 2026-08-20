@@ -1,4 +1,4 @@
-<h1 align="left">Lakshira Handwoven Weaves — Data & Systems Build</h1>
+<h1 align="left">Lakshira Handwoven Weaves: Data & Systems Build</h1>
 
 An end-to-end data and systems engagement for a real small business: a handloom textile brand with no data infrastructure, rapid organic growth it couldn't measure, and an ambition to reach luxury-boutique scale. This repo documents the full build, stage by stage: from the discovery work that scoped the problem through the operational system now running the business day to day.
 
