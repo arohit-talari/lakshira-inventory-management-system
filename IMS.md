@@ -29,46 +29,48 @@ Add Inventory · Edit Inventory Details · Reprice a Unit · Discount Simulator 
 
 Every write operation follows the same guided shape: look up → validate eligibility → collect fields one at a time with plain-English error messages → full confirmation summary → explicit confirmation required → write → success message. See [ARCHITECTURE.md](ARCHITECTURE.md) for the data model, SKU generation logic, currency handling, and per-operation detail.
 
-## Testing and quality assurance
+## Requirements validation and UAT
 
-This is the section I'd point a technical reviewer to first.
+Before this system could be trusted with real customer and financial data, it had to prove it actually solved the business's problem, not just that the code ran. Validation was run as a structured UAT process: 355 defects identified against real business workflows and stakeholder-observed scenarios, each classified by business risk rather than technical severity (23 rated Critical), and each traced back to a specific requirement or a specific gap in how the manual process previously worked. That process, not the code itself, is what turned this from a working script into a system the business could actually depend on.
 
-**Two-tier, 205-test automated suite:**
-- **130 unit tests** — pure business logic (pricing math, date handling, report metric calculations), zero I/O, zero flakiness
-- **75 integration tests** — drive the actual interactive CLI through a real pseudo-terminal (`pexpect`) against a live test-mode Google Sheet, covering all 10 operations end-to-end: happy paths, status-based rejections, validation errors, blank/malformed-data warnings, and cancellation paths
+**A two-tier, 205-test automated regression suite locks each resolved defect in place:**
+- **130 tests** validating core business logic (pricing calculations, date/aging rules, report metrics) in isolation
+- **75 tests** driving the full guided workflow end-to-end against a live test environment, covering all 10 operations: correct-path completion, appropriate rejection of invalid states, validation-error handling, and cancellation paths
 
-**Testing types represented:**
-- **Functional** — every operation's core flow, verified against real sheet state after each write
-- **Edge case** — comma-formatted currency values, below-cost pricing, blank cost/price cells, 100%-discount dead-ends, four-figure outstanding balances
-- **Regression** — every bug found below has a dedicated test pinning the fix, so it can't silently reappear
-- **UAT** — email delivery and generated PDF report content were verified directly by the business stakeholder against production data (the live Google Sheet *and* the independent MySQL warehouse), not just automated assertions
+**Validation coverage:**
+- **Functional** — every operation's core flow, verified against real data state after each write
+- **Edge case / real-world data conditions** — currency values formatted the way the business actually enters them, below-cost pricing, incomplete cost/price data, discount edge cases, four-figure outstanding balances
+- **Regression** — every defect below is locked behind a dedicated test, so a resolved issue can't silently reappear
+- **Stakeholder UAT** — email delivery and generated report content were verified directly by the business owner against production data, both the live system of record and the independent data warehouse, not just automated checks
 
-**Concurrency testing:** every write operation re-reads its target row immediately before committing and aborts if anything has changed since the operation started — verified live with two terminal sessions editing the same inventory unit simultaneously.
+**Concurrency risk, identified and resolved:** because more than one person can act on the same inventory record at once, every write was required to detect and reject a conflicting concurrent change rather than silently overwrite it, verified directly with two simultaneous sessions attempting to edit the same unit.
 
-**Real bugs found and fixed through this process** (each has a regression test):
-- A 100%-reproducible crash in the repricing flow (undefined variable reached on every call)
-- A silent no-op path with no user feedback on one confirmation flow
-- Six call sites that crashed on any comma-formatted currency value ≥ $1,000 (a locale-formatting bug invisible until tested against realistic data)
-- A discount-removal flow that failed to re-check pricing validity after the discount was removed
-- A payment-status flow that offered a mathematically impossible option under a specific discount condition
+**Real defects this process surfaced, each now closed with a permanent regression test:**
+- A repricing workflow that failed on every attempt, traced to a business-logic gap in how one pricing path was handled
+- A confirmation step that completed with no feedback to the user, masking whether the action had actually happened
+- A payment-tracking flow that broke on realistic transaction amounts (any outstanding balance of $1,000 or more), a defect invisible until tested against real business scale
+- A discount-removal flow that didn't re-validate pricing after the discount was reversed
+- A payment-status option offered in a scenario where it was mathematically impossible to fulfill
 
-## Process improvement: Lean Six Sigma applied to software
+## Process improvement: Lean Six Sigma applied to defect management
 
-The testing and bug-fixing effort behind this repo followed a DMAIC structure, applied to a codebase instead of a physical process:
+The validation effort above was run as a structured DMAIC cycle, the same framework used to drive process improvement on the business side of this engagement, applied here to closing the gap between the manual process and the delivered system:
 
 - **Define** — the manual, hand-edited spreadsheet was the source of the defects being eliminated: no validation, no audit trail, silent data-entry errors, no repeatable reporting process.
-- **Measure** — a 205-test suite (130 unit + 75 live-integration tests covering all 10 operations) established a real, repeatable baseline instead of relying on ad hoc manual spot-checks.
-- **Analyze** — every failure was root-caused before being touched. A reproducible crash was traced to an undefined variable reached on every call path, not patched with a broad try/except; a metric mismatch between the report and the master sheet was traced to 10 specific rows missing one formula cell, not written off as noise.
-- **Improve** — five confirmed defects fixed at the root cause (listed above). The aging-metric mismatch from the Analyze step was corrected two ways: the 10 affected rows were backfilled, *and* the new-inventory flow was changed to auto-copy every formula-driven column on creation, so the same class of drift can't recur on future rows — a fix aimed at the recurrence mechanism, not just the immediate symptom.
-- **Control** — every fix shipped with a dedicated regression test pinning it in place, so a fixed defect can silently reappear without a test failing to catch it. The suite reruns before every change, functioning as this project's control mechanism in place of a physical control chart.
+- **Measure** — 355 defects identified and prioritized by business risk (23 Critical), against a 205-test suite establishing a real, repeatable baseline instead of ad hoc spot-checks.
+- **Analyze** — every defect was root-caused against the actual business workflow it broke, not patched at the symptom. A reporting mismatch, for example, was traced back to specific incomplete source records rather than written off as noise.
+- **Improve** — each defect resolved at its root cause, with the underlying process changed so the same class of issue can't recur, not just the immediate instance fixed.
+- **Control** — every fix locked behind a permanent regression test, re-run before any future change, functioning as this project's control mechanism in place of a physical control chart.
 
-**Specific tools applied, not just DMAIC as a label:**
+**Specific Lean Six Sigma tools applied, not just DMAIC as a label:**
 
-- **Poka-yoke (mistake-proofing)** — every constrained field (status, category, weave type, sales channel) is a validated pick-list, never free text. An entire class of data-entry defect is made structurally impossible, not just discouraged.
-- **Standardized work** — all 10 operations follow the identical look-up → validate → collect → confirm → write pattern, so the system behaves predictably regardless of which operation is running.
-- **Waste elimination (Muda)** — manual spreadsheet math and cross-referencing (motion/waiting waste) replaced by automated calculation; recurring data-entry defects (defect waste) eliminated by poka-yoke validation; a report that once required manually compiling numbers across tabs now generates in one command.
-- **Root cause analysis** — every bug in this repo's history was traced to its actual origin before a fix was written, not just to a symptom.
-- **Kaizen (continuous improvement)** — the system evolved through repeated, incremental audit → fix → test cycles across the project's history, rather than one large rewrite.
+- **Poka-yoke (mistake-proofing)** — every constrained business field (status, category, weave type, sales channel) is a validated pick-list, never free text. An entire class of data-entry defect is made structurally impossible, not just discouraged.
+- **Standardized work** — all 10 operations follow an identical look-up → validate → collect → confirm → commit pattern, so the system behaves predictably for a non-technical user regardless of which task they're performing.
+- **Waste elimination (Muda)** — manual cross-referencing and calculation (motion/waiting waste) replaced by automation; recurring data-entry defects (defect waste) prevented at the point of entry; a report that once required manually compiling numbers across tabs now generates on demand.
+- **Root cause analysis** — every defect traced to its actual origin in the business process before a fix was specified, not just to its symptom.
+- **Kaizen (continuous improvement)** — the system evolved through repeated audit → fix → validate cycles across the engagement, not one large rewrite.
+
+The implementation itself, how each fix was actually written into the codebase, was directed AI-assisted development through Claude Code, reviewed and validated at every step against the criteria above; see the repository code and test suite for that layer directly.
 
 ## Running it
 
@@ -104,4 +106,4 @@ STAKEHOLDER_DISCOVERY.md  # the requirements-gathering framework that shaped eve
 
 ---
 
-*Real supplier and customer data are not included anywhere in this repo — the system's only data store is Google Sheets (and, downstream, the business's own MySQL warehouse), never this codebase. A few reference values (e.g. the supplier list) are seeded with placeholder data of the same shape as production for demonstration purposes.*
+*Real supplier and customer data are not included anywhere in this repo — the system's only data store is Google Sheets (and, downstream, the business's own MySQL warehouse), never this codebase. Specific business findings and figures from the engagement are documented in a private report for the client instead of published here, standard confidentiality practice for a real, operating business, not a reflection on the work or its results. A few reference values (e.g. the supplier list) are seeded with placeholder data of the same shape as production for demonstration purposes.*

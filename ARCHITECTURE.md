@@ -12,7 +12,9 @@ It's not a generalized inventory platform — it's shaped specifically around on
 
 ## 2. Who Uses It
 
-- **The business owner** — built and maintains the system, technically proficient
+Designed and directed by **Arohit Talari**, acting as business analyst and consultant to the business throughout this engagement, with implementation carried out through directed AI-assisted development (see the main [README](README.md) for the full discovery-through-delivery lifecycle this system is one stage of). The system itself serves:
+
+- **The business owner** — the system's primary daily user; non-technical, runs sourcing, pricing, and sales through the CLI with no assumed technical background
 - **A non-technical staff user** — runs day-to-day retail operations (customer-facing sales via social/messaging channels), needs the CLI to guide them step by step with no assumed technical knowledge
 - **Future employees** — unknown technical background; every prompt has to explain itself
 
@@ -20,7 +22,7 @@ That constraint — a genuinely non-technical primary user — drives most of th
 
 ## 3. Data Model
 
-The master sheet has 35 columns. A few worth calling out:
+The master sheet has 39 columns. A few worth calling out:
 
 | Column | Entry method |
 |---|---|
@@ -69,7 +71,7 @@ Every write operation follows the same shape: look up → validate status/eligib
 
 ## 7. Concurrency Safety
 
-Because multiple people (or the same person from two terminals) can operate against the same live sheet, every write-path operation re-reads the target row immediately before writing and compares it against the snapshot taken when the operation started. If anything the write depends on has changed in the meantime — a status flip, a cost edit, a payment recorded by someone else — the write is aborted with a clear explanation, and nothing is written. This was verified directly: two terminals editing the same unit at once, one reprice correctly rejected after the other terminal's concurrent cost edit landed first.
+A real business risk once more than one person can touch the same record: two staff members, or the same person across two sessions, could act on the same inventory unit at the same time, and a naive system would let the second write silently overwrite the first, losing a price change, a payment, or a status update with no one the wiser. This was scoped as a hard requirement, not an edge case to accept: every write-path operation re-reads the target row immediately before committing and compares it against the state it started from. If anything relevant changed in the meantime — a status flip, a cost edit, a payment recorded by someone else — the write is rejected with a clear explanation instead of silently overwriting it. Verified directly: two sessions editing the same unit at once, with the second write correctly rejected once the first one's change had landed.
 
 ## 8. Test/Live Mode
 

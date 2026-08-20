@@ -21,6 +21,7 @@ Before any recommendation was made, a structured stakeholder interview mapped ho
 | **Scope** | 45 questions across current-state workflow, pain points, customers, suppliers, financials, and growth goals |
 | **Audit** | A formal data-quality audit logging 44 specific pre-existing issues before a line of the new system was built |
 | **Output** | Findings that directly shaped the data model, the analytics built, and the 10 operations scoped into the system below |
+| **Impact** | Self-reported inventory count was found to understate actual holdings by roughly half once every source was located |
 
 [Interview Framework](STAKEHOLDER_DISCOVERY.md)
 
@@ -33,6 +34,7 @@ Inventory was fragmented across 12 separate spreadsheets with no single source o
 | **Before** | 12 fragmented spreadsheets, no standardized categories, suppliers, or pricing method |
 | **Built** | One unified master sheet with standardized reference tables, data validation, conditional formatting, and formula-driven fields |
 | **Documentation** | A full data dictionary and category/supplier reference tables, produced as standalone artifacts |
+| **Impact** | Manual pricing, tested under direct supervision, contained a calculation error roughly 7 times in 10; corrected pricing recovered several thousand dollars in inventory that had been priced below its own cost |
 
 <h3 align="left">3. Data Warehouse</h3>
 
@@ -44,6 +46,7 @@ A unified sheet still couldn't answer ad hoc business questions at scale, so a P
 | **Schema** | 5 normalized tables: category, customer, inventory, supplier, transaction |
 | **Scale** | 1,495 inventory records · 494 transactions · 61 customers · 18 suppliers |
 | **Status** | Built and running; ETL codebase not yet published as a separate repo |
+| **Impact** | Ad hoc business questions that once took hours of manual spreadsheet review, e.g. supplier profitability or cash tied up in aging stock, are now answered in seconds |
 
 <h3 align="left">4. Business Intelligence & Analytics</h3>
 
@@ -54,6 +57,7 @@ On top of the warehouse, a 3-dashboard Tableau workbook and a set of retail-spec
 | **Dashboards** | Business Overview · Customer Intelligence · Inventory & Operations (22 KPIs and visualizations total) |
 | **Analytics** | Sell-through rate, dead stock/markdown, inventory health & turnover, supplier performance, pricing effectiveness, margin-bucket distribution |
 | **Status** | Built and in use; not published publicly, since it surfaces real business figures |
+| **Impact** | Visibility into inventory-aging risk directly changed intake behavior; the following month became the business's best on record |
 
 <h3 align="left">5. Operational System</h3>
 
@@ -64,9 +68,10 @@ The data and analytics foundation still left a gap. The owner was already juggli
 | **Operations** | 10, covering the full inventory-to-sale-to-reporting lifecycle |
 | **Quality assurance** | 355 defects resolved (23 Critical) via structured UAT, backed by a 205-test automated regression suite |
 | **Built with** | Python, in collaboration with Claude Code |
+| **Impact** | Removed day-to-day reliance on manual analyst involvement for pricing and discount decisions, replacing ad hoc requests with self-serve tools grounded in real margin thresholds |
 
 [Project README](IMS.md) **·** [Architecture](ARCHITECTURE.md)
 
 ---
 
-*Real customer, supplier, and financial data are not included anywhere in this repo. Figures above are either aggregate counts (record/table counts) or reference values seeded with placeholder data of the same shape as production.*
+*Real customer, supplier, and financial data are not included anywhere in this repo, and specific business findings and figures from the engagement are documented in a private report for the client instead of published here, standard confidentiality practice for a real, operating business, not a reflection on the work or its results. Figures above are either aggregate counts (record/table counts) or reference values seeded with placeholder data of the same shape as production.*
