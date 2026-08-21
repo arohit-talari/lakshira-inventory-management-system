@@ -115,7 +115,7 @@ Once the warehouse was built and a string of descriptive and diagnostic queries 
 
 <h3 align="left">5. Operational System</h3>
 
-The data and analytics foundation still left a gap: the owner, already juggling supplier relationships, sales, marketing, advertising, and building her own storefront from scratch, found that data entry and management remained a bottleneck compounding downstream into how she assessed the business. The final stage scoped the business down to its 10 most-used, most-critical operations, replacing manual spreadsheet editing with a guided CLI that catches errors before they happen and automates the calculations most prone to mistakes, without ever standing in for her judgment and expertise. Every guardrail and workflow decision was shaped by directly observing how she actually worked, not designed in the abstract, then directed through AI-assisted development into the working system.
+The data and analytics foundation still left a gap: the owner, already juggling supplier relationships, sales, marketing, advertising, and building her own storefront from scratch, found that data entry and management remained a bottleneck compounding downstream into how she assessed the business. The final stage scoped the business down to its 10 most-used, most-critical operations, replacing manual spreadsheet editing with a guided Command-Line Interface (CLI) that catches errors before they happen and automates the calculations most prone to mistakes, without ever standing in for her judgment and expertise. Every guardrail and workflow decision was shaped by directly observing how she actually worked, not designed in the abstract, then directed through AI-assisted development into the working system.
 
 | | |
 |---|---|

@@ -14,7 +14,7 @@ It's not a generalized inventory platform. It's shaped specifically around one b
 
 Designed and directed by **Arohit Talari**, acting as business analyst and consultant to the business throughout this engagement, with implementation carried out through directed AI-assisted development (see the main [README](../README.md) for the full discovery-through-delivery lifecycle this system is one stage of). The system itself serves:
 
-- **The business owner**: the system's primary daily user, non-technical, runs sourcing, pricing, and sales through the CLI with no assumed technical background
+- **The business owner**: the system's primary daily user, non-technical, runs sourcing, pricing, and sales through the Command-Line Interface (CLI) with no assumed technical background
 - **A non-technical staff user**: runs day-to-day retail operations (customer-facing sales via social/messaging channels), needs the CLI to guide them step by step with no assumed technical knowledge
 - **Future employees**: unknown technical background, every prompt has to explain itself
 
