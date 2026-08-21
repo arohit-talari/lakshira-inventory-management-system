@@ -1,4 +1,4 @@
-<h1 align="center">Lakshira Inventory Management System</h1>
+<h1 align="center">Lakshira's Inventory Management System</h1>
 
 *Part of the [Lakshira engagement](../README.md). This is the deep dive on the operational-system stage specifically; refer to the main README for the full lifecycle: discovery, data foundation, warehouse, BI, and this system.*
 
