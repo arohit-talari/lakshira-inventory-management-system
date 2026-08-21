@@ -13,12 +13,12 @@ flowchart LR
     E -.->|surfaces new needs| B
 ```
 
-<h2 align="left">What's in this repo</h2>
+<h2 align="left">Repository Structure</h2>
 
 | | |
 |---|---|
-| **`docs/`** | The write-ups and diagrams: how the system works, what it does, how its requirements were gathered, and the database schema it's built on |
-| **`inventory_management_system/`** | The actual system: its code, the fonts and logo used in generated reports, and a settings template |
+| **`docs/`** | The write-ups and diagrams: how the system works, how its requirements were gathered, and the schema it's built on |
+| **`inventory_management_system/`** | The system itself: its code, the fonts and logo used in generated reports, and a settings template |
 | **`tests/`** | 205 automated checks that confirm the system still works correctly every time something changes |
 | **`requirements.txt`** | The list of external tools the system needs installed to run |
 | **`pytest.ini`** | Configuration for running the automated tests |
