@@ -53,7 +53,7 @@ Inventory tracking was dispersed across 12 separate spreadsheets with no single 
 
 <h3 align="left">3. Data Warehouse</h3>
 
-A unified sheet still couldn't answer ad hoc business questions at scale, so a Python ETL pipeline extracts data from Google Sheets via the Sheets API, transforms it with pandas, and loads it into a normalized MySQL schema hosted on AWS RDS. The business's live operational data became something queryable for analysis the spreadsheet alone couldn't support.
+A unified master sheet centralized the data needed to assess the business's health, but it still couldn't support Exploratory Data Analysis (descriptive and diagnostic analytics, done ad hoc) at scale, so a Python ETL pipeline extracts data from the master sheet via the Sheets API, transforms it with pandas, and loads it into a normalized MySQL schema hosted on AWS RDS. The business's live operational data became queryable for analysis the sheet alone couldn't support.
 
 | | |
 |---|---|
