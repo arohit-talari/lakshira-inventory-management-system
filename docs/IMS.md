@@ -36,7 +36,7 @@ This is the operational-system stage's own stack. The data warehouse (MySQL/AWS 
 9. **Customer Insights**
 10. **Generate Report**
 
-Every write operation follows the same guided shape: look up → validate eligibility → collect fields one at a time with plain-English error messages → full confirmation summary → explicit confirmation required → write → success message. See [Architecture](ARCHITECTURE.md) for the data model, SKU generation logic, currency handling, and per-operation detail.
+Every write operation follows the same guided shape: look up → validate status/eligibility → collect fields one at a time → show a full confirmation summary → require explicit confirmation → write → confirm success. Errors surface in plain English at the point of entry, not after the fact. See [Architecture](ARCHITECTURE.md) for the data model, SKU generation logic, currency handling, and per-operation detail.
 
 ## Requirements validation and UAT
 
