@@ -19,7 +19,7 @@ Lakshira was running entirely on a hand-edited spreadsheet: no validation, no au
 | Currency conversion | Live European Central Bank (ECB) historical exchange rates via the Frankfurter API |
 | Reporting | `reportlab` (PDF generation), Claude API (executive summary grounded in brand context and stakeholder-discovery findings, injected into the prompt each run) |
 | Scheduling | macOS `launchd` (automated monthly/quarterly/annual report generation) |
-| Testing | `pytest`, `pexpect` (drives the interactive CLI through a pty) |
+| Testing | `pytest`, `pexpect` (drives the interactive CLI through a pseudo-terminal, or pty) |
 
 This is the operational-system stage's own stack. The data warehouse (MySQL/AWS RDS) and BI layer (Tableau) that this system feeds are covered in the main [README](../README.md), not duplicated here.
 
