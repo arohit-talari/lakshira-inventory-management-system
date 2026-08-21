@@ -100,7 +100,7 @@ flowchart TD
 
 <h3 align="left">4. Business Intelligence & Analytics</h3>
 
-On top of the warehouse, a 3-dashboard Tableau workbook and a set of retail-specific analytical frameworks give the owner visibility she never had: what's selling, what's aging, which suppliers perform, and where pricing is and isn't working. The same analytics feed both the Tableau layer and dedicated tabs on the production sheet, so the insight isn't locked behind one tool.
+Once the warehouse was built and a string of descriptive and diagnostic queries had been run against it, it became clear which north-star KPIs and visualizations needed a permanent home to give the owner visibility she never had. A 3-Dashboard Tableau Workbook was built to cover three core areas of the business: Business Overview, Inventory & Operations, and Customer Intelligence. The same retail-specific analytical frameworks feed both the Tableau layer and dedicated tabs on the production sheet, so the insight isn't locked behind one tool.
 
 | | |
 |---|---|
