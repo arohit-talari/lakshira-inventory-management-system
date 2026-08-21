@@ -1,4 +1,4 @@
-# Stakeholder Discovery: Interview Framework
+# Discovery & Requirements: Interview Framework
 
 **Business Analyst Interview Guide**
 

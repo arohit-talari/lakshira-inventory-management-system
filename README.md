@@ -6,7 +6,7 @@ My approach stays the same regardless of stage: understand the business and the 
 
 ```mermaid
 flowchart LR
-    A["`**Stakeholder Discovery**`"] --> B["`**Data Foundation**`"]
+    A["`**Discovery &amp; Requirements**`"] --> B["`**Data Foundation**`"]
     B --> C["`**Data Warehouse**`"]
     C --> D["`**Business Intelligence**`"]
     D --> E["`**Operational System**`"]
@@ -32,10 +32,10 @@ Before any recommendation was made, a structured stakeholder discovery and requi
 
 | | |
 |---|---|
-| **Method** | Structured 7-section stakeholder interview, run as a conversation, not a script |
+| **Method** | 7-section discovery and requirements session, run as a conversation, not a script |
 | **Scope** | 45 questions across current-state workflow, pain points, customers, suppliers, financials, growth goals, and current data and tools |
-| **Audit** | A formal data-quality audit logging 44 specific pre-existing issues before a line of the new system was built |
-| **Output** | Findings that directly shaped the data model, the analytics built, and the 10 operations scoped into the system below |
+| **Audit** | A formal data-quality audit logging 44 specific pre-existing issues, including duplicate SKUs and missing cost/pricing data, before a line of the new system was built |
+| **Output** | Findings that directly shaped the data model, the analytics built, and the 10 operations scoped into **Operational System** |
 | **Impact** | Self-reported inventory count was found to understate actual holdings by roughly half once every source was located |
 
 [Interview Framework](docs/STAKEHOLDER_DISCOVERY.md)
