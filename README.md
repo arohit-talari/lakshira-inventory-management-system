@@ -61,7 +61,7 @@ A unified master sheet centralized the data needed to assess the business's heal
 | **Schema** | 5 normalized tables: category, customer, inventory, supplier, transaction |
 | **Scale** | 1,495 inventory records · 494 transactions · 61 customers · 18 suppliers |
 | **Status** | Built and running; ETL codebase not yet published as a separate repo |
-| **Impact** | Ad hoc business questions that once took hours of manual spreadsheet review, e.g. supplier profitability or cash tied up in aging stock, are now answered in seconds |
+| **Impact** | Exploratory Data Analysis, e.g. supplier profitability or cash tied up in aging stock, that once took hours of manual spreadsheet review is now done in seconds |
 
 ```mermaid
 flowchart TD
