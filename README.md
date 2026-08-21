@@ -9,6 +9,17 @@ Stakeholder Discovery ──► Data Foundation ──► Data Warehouse ──�
    (BA interview)          (unified sheet)      (MySQL/AWS RDS)     (Tableau + analytics)      (this IMS)
 ```
 
+<h2 align="left">What's in this repo</h2>
+
+| | |
+|---|---|
+| **`docs/`** | The write-ups: how the system works, what it does, and how the requirements behind it were gathered |
+| **`inventory_management_system/`** | The actual system: its code, the fonts/logo used in generated reports, and a template for its settings |
+| **`tests/`** | 205 automated checks that confirm the system still works correctly every time something changes |
+| **`requirements.txt`** | The list of external tools the system needs installed to run |
+| **`pytest.ini`** | Configuration for running the automated tests |
+| **`.gitignore`** | Tells Git which files, like passwords and credentials, should never be uploaded |
+
 <h2 align="left">Stages</h2>
 
 <h3 align="left">1. Discovery & Requirements</h3>
