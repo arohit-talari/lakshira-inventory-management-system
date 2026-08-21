@@ -6,12 +6,11 @@ My approach stays the same regardless of stage: understand the business and the 
 
 ```mermaid
 flowchart LR
-    A["Stakeholder Discovery<br/>BA interview"] --> B["Data Foundation<br/>unified sheet"]
-    B --> C["Data Warehouse<br/>MySQL/AWS RDS"]
-    C --> D["Business Intelligence<br/>Tableau + analytics"]
-    D --> E["Operational System<br/>this IMS"]
-    D -. new findings surface new data needs .-> B
-    E -. new findings surface new data needs .-> B
+    A[Stakeholder Discovery] --> B[Data Foundation]
+    B --> C[Data Warehouse]
+    C --> D[Business Intelligence]
+    D --> E[Operational System]
+    E -.->|surfaces new needs| B
 ```
 
 <h2 align="left">What's in this repo</h2>
