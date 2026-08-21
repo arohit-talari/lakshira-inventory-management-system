@@ -124,4 +124,4 @@ The data and analytics foundation still left a gap: the owner, already juggling 
 
 ---
 
-*Note: real customer, supplier, and financial data are not included anywhere in this repo, and specific business findings and figures from the engagement are documented in a private report for the client instead of published here, standard confidentiality practice for a real, operating business, not a reflection on the work or its results. Figures above are either aggregate counts (record/table counts) or reference values seeded with placeholder data of the same shape as production.*
+*Note: real customer, supplier, and financial data are not included anywhere in this repo, and specific business findings and figures from the engagement are documented in a private report for the client instead, standard confidentiality practice for an operating business, not a reflection on the work or its results. Figures above are either aggregate counts (record/table counts) or reference values seeded with placeholder data of the same shape as production.*
