@@ -1,14 +1,12 @@
 # Discovery & Requirements: Interview Framework
 
-**Business Analyst Interview Guide**
-
 This is the question framework used to run a combined stakeholder discovery and requirements-gathering session, Stage 1 of the full [Lakshira project](../README.md) and the process behind [ARCHITECTURE.md](ARCHITECTURE.md), not just its output.
 
 The stakeholder's actual answers are not included here. They contain real financial figures, customer and supplier specifics, and other business-confidential detail that isn't appropriate to publish. What's shown is the methodology: how the conversation was structured to move from "how does this business actually work today" to "what does a system need to do about it," in a single session appropriate to a one-person engagement with a single decision-maker.
 
 ## How this was run
 
-The session followed a conversation, not an interrogation format: starting with open, low-stakes questions to get the stakeholder talking naturally about her business, then following the threads she opened rather than sticking rigidly to a script. The most valuable answers came from going off-script, rarely from mechanically working down the list.
+The session ran as a free-flowing conversation, not an interrogation: starting with open, low-stakes questions to get the stakeholder talking naturally about her business, then following the threads she opened rather than sticking rigidly to a script. The most valuable answers came from going off-script, rarely from mechanically working down the list.
 
 ---
 
