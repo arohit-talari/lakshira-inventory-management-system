@@ -107,7 +107,7 @@ Once the warehouse was built and a string of descriptive and diagnostic queries 
 | **Dashboards** | Business Overview · Inventory & Operations · Customer Intelligence |
 | **Analytics** | Sell-through rate, dead stock/markdown, inventory health & turnover, supplier performance, pricing effectiveness, margin-bucket distribution |
 | **Status** | Built and in use; not published publicly: it surfaces real business figures |
-| **Impact** | Visibility into inventory-aging risk directly changed intake behavior; the following month became the business's best on record among sales with a confirmed date |
+| **Impact** | Visibility into inventory-aging risk directly changed intake behavior, as the following month became the business's best on record among sales with a confirmed date |
 
 <h3 align="left">5. Operational System</h3>
 
