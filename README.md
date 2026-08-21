@@ -17,7 +17,7 @@ flowchart LR
 
 | | |
 |---|---|
-| **`docs/`** | The write-ups: how the system works, what it does, and how the requirements behind it were gathered |
+| **`docs/`** | The write-ups and diagrams: how the system works, what it does, how the requirements behind it were gathered, and the database schema it's built on |
 | **`inventory_management_system/`** | The actual system: its code, the fonts/logo used in generated reports, and a template for its settings |
 | **`tests/`** | 205 automated checks that confirm the system still works correctly every time something changes |
 | **`requirements.txt`** | The list of external tools the system needs installed to run |
@@ -62,6 +62,10 @@ A unified sheet still couldn't answer ad hoc business questions at scale, so a P
 | **Scale** | 1,495 inventory records · 494 transactions · 61 customers · 18 suppliers |
 | **Status** | Built and running; ETL codebase not yet published as a separate repo |
 | **Impact** | Ad hoc business questions that once took hours of manual spreadsheet review, e.g. supplier profitability or cash tied up in aging stock, are now answered in seconds |
+
+The schema was designed before a line of the pipeline was written, not reverse-engineered from the code after the fact:
+
+![Entity-relationship diagram: category, supplier, and customer tables feeding into inventory, which feeds into transaction](docs/erd.png)
 
 <h3 align="left">4. Business Intelligence & Analytics</h3>
 
