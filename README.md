@@ -2,7 +2,7 @@
 
 An end-to-end data and systems engagement for a real small business: a handloom textile brand with no data infrastructure, rapid organic growth it couldn't measure, and an ambition to reach luxury-boutique scale. This repo documents the full build, stage by stage: from the discovery work that scoped the problem through the operational system now running the business day to day.
 
-My approach stays the same regardless of stage: understand the business and the question before touching a tool. Discovery came first specifically to surface the pressure points already hampering the business, and every stage since has been built on what the one before it established, in order, not in parallel. But it isn't a one-shot pipeline. Day-to-day use of Business Intelligence and Operational System continues to surface new data needs, which loop back into Data Foundation and flow forward again.
+My approach stays the same regardless of stage: understand the business and the question before touching a tool. Discovery came first specifically to surface the pressure points already hampering the business, and every stage since has been built on what the one before it established, in order, not in parallel. But it isn't a one-shot pipeline. Day-to-day use of **Business Intelligence** and **Operational System** continues to surface new data needs, which loop back into **Data Foundation** and flow forward again.
 
 ```mermaid
 flowchart LR
