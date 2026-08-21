@@ -2,11 +2,16 @@
 
 An end-to-end data and systems engagement for a real small business: a handloom textile brand with no data infrastructure, rapid organic growth it couldn't measure, and an ambition to reach luxury-boutique scale. This repo documents the full build, stage by stage: from the discovery work that scoped the problem through the operational system now running the business day to day.
 
-My approach stays the same regardless of stage: understand the business and the question before touching a tool. Each stage below was built on what the one before it established, not in parallel and not out of order.
+My approach stays the same regardless of stage: understand the business and the question before touching a tool. Each stage below was built on what the one before it established, staged and sequential, not in parallel and not out of order. But it isn't a one-shot pipeline: using the system in Business Intelligence and the Operational System keeps surfacing new data needs that loop back into Data Foundation, which then flows forward again.
 
-```
-Stakeholder Discovery ──► Data Foundation ──► Data Warehouse ──► Business Intelligence ──► Operational System
-   (BA interview)          (unified sheet)      (MySQL/AWS RDS)     (Tableau + analytics)      (this IMS)
+```mermaid
+flowchart LR
+    A["Stakeholder Discovery<br/>BA interview"] --> B["Data Foundation<br/>unified sheet"]
+    B --> C["Data Warehouse<br/>MySQL/AWS RDS"]
+    C --> D["Business Intelligence<br/>Tableau + analytics"]
+    D --> E["Operational System<br/>this IMS"]
+    D -. new findings surface new data needs .-> B
+    E -. new findings surface new data needs .-> B
 ```
 
 <h2 align="left">What's in this repo</h2>
