@@ -23,7 +23,7 @@ Before any recommendation was made, a structured stakeholder interview mapped ho
 | **Output** | Findings that directly shaped the data model, the analytics built, and the 10 operations scoped into the system below |
 | **Impact** | Self-reported inventory count was found to understate actual holdings by roughly half once every source was located |
 
-[Interview Framework](STAKEHOLDER_DISCOVERY.md)
+[Interview Framework](docs/STAKEHOLDER_DISCOVERY.md)
 
 <h3 align="left">2. Data Foundation</h3>
 
@@ -70,7 +70,7 @@ The data and analytics foundation still left a gap. The owner was already juggli
 | **Built with** | Python, in collaboration with Claude Code |
 | **Impact** | Removed day-to-day reliance on manual analyst involvement for pricing and discount decisions, replacing ad hoc requests with self-serve tools grounded in real margin thresholds |
 
-[Project README](IMS.md) **·** [Architecture](ARCHITECTURE.md)
+[Project README](docs/IMS.md) **·** [Architecture](docs/ARCHITECTURE.md)
 
 ---
 

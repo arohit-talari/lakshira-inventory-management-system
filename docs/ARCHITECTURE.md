@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes how the system is built and why: the data model, the pricing/currency logic, and the design decisions behind each operation. For setup and usage, see [IMS.md](IMS.md); for the full project lifecycle this system is one stage of, see the main [README](README.md).
+This document describes how the system is built and why: the data model, the pricing/currency logic, and the design decisions behind each operation. For setup and usage, see [IMS.md](IMS.md); for the full project lifecycle this system is one stage of, see the main [README](../README.md).
 
 ---
 
@@ -12,7 +12,7 @@ It's not a generalized inventory platform. It's shaped specifically around one b
 
 ## 2. Who Uses It
 
-Designed and directed by **Arohit Talari**, acting as business analyst and consultant to the business throughout this engagement, with implementation carried out through directed AI-assisted development (see the main [README](README.md) for the full discovery-through-delivery lifecycle this system is one stage of). The system itself serves:
+Designed and directed by **Arohit Talari**, acting as business analyst and consultant to the business throughout this engagement, with implementation carried out through directed AI-assisted development (see the main [README](../README.md) for the full discovery-through-delivery lifecycle this system is one stage of). The system itself serves:
 
 - **The business owner**: the system's primary daily user, non-technical, runs sourcing, pricing, and sales through the CLI with no assumed technical background
 - **A non-technical staff user**: runs day-to-day retail operations (customer-facing sales via social/messaging channels), needs the CLI to guide them step by step with no assumed technical knowledge

@@ -1,6 +1,6 @@
 # Lakshira Inventory Management System
 
-*Part of the [Lakshira project](README.md). This is the deep dive on the operational-system stage specifically; start at the main README for the full lifecycle: discovery, data foundation, warehouse, BI, and this system.*
+*Part of the [Lakshira project](../README.md). This is the deep dive on the operational-system stage specifically; start at the main README for the full lifecycle: discovery, data foundation, warehouse, BI, and this system.*
 
 A terminal-based inventory, sales, and business-intelligence system built for Lakshira Handwoven Weaves, a small handloom textile business, replacing manual spreadsheet editing with a guided, validated CLI.
 
@@ -21,7 +21,7 @@ A production textile business was running entirely on a hand-edited Google Sheet
 | Scheduling | macOS `launchd` (automated monthly/quarterly/annual report generation) |
 | Testing | `pytest`, `pexpect` (drives the interactive CLI through a pty) |
 
-This is the operational-system stage's own stack. The data warehouse (MySQL/AWS RDS) and BI layer (Tableau) that this system feeds are covered in the [main README](README.md), not duplicated here.
+This is the operational-system stage's own stack. The data warehouse (MySQL/AWS RDS) and BI layer (Tableau) that this system feeds are covered in the [main README](../README.md), not duplicated here.
 
 ## The system: 10 operations
 
@@ -74,15 +74,19 @@ The implementation itself, how each fix was written into the codebase, was direc
 
 ## Running it
 
+All commands run from the repo root.
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
+cd inventory_management_system
 cp .env.example .env   # fill in your own values
 # place a Google service account key as credentials.json in this directory
+cd ..
 
-python3 inventory.py
+python3 inventory_management_system/inventory.py
 ```
 
 Run the test suite:
@@ -95,13 +99,17 @@ pytest tests/test_interactive_*.py -v -s       # Tier 2 -- needs TEST_SHEET_ID c
 ## Repository structure
 
 ```
-inventory.py              # the CLI -- all 10 operations
-generate_report.py        # PDF report generation + AI executive summary
-report_config.py          # reporting configuration (fonts, brand colors, secrets loading)
-scheduler.py              # automated report scheduling (macOS launchd)
-tests/                    # 205 tests across both tiers
-ARCHITECTURE.md           # data model, SKU logic, currency handling, per-operation detail
-STAKEHOLDER_DISCOVERY.md  # the requirements-gathering framework that shaped every decision above
+inventory_management_system/
+  inventory.py             # the CLI -- all 10 operations
+  generate_report.py       # PDF report generation + AI executive summary
+  report_config.py         # reporting configuration (fonts, brand colors, secrets loading)
+  scheduler.py             # automated report scheduling (macOS launchd)
+  assets/                  # fonts and logo used by generated PDF reports
+  .env.example             # template for the .env this system reads at runtime
+tests/                     # 205 tests across both tiers
+docs/
+  ARCHITECTURE.md          # data model, SKU logic, currency handling, per-operation detail
+  STAKEHOLDER_DISCOVERY.md # the requirements-gathering framework that shaped every decision above
 ```
 
 ---
