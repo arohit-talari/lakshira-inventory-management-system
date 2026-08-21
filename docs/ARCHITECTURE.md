@@ -46,7 +46,7 @@ The `Unassigned` status is a deliberate design choice: a SKU can be generated in
 
 ## 5. Pricing and Currency Logic
 
-All INR/USD conversion uses the historical ECB exchange rate for the unit's *acquisition date*, fetched live via the [Frankfurter API](https://www.frankfurter.app/), not today's rate and not a fixed constant. This matters for margin accuracy: a unit acquired eight months ago should have its cost basis computed at the exchange rate that actually applied then.
+All INR/USD conversion uses the historical European Central Bank (ECB) exchange rate for the unit's *acquisition date*, fetched live via the [Frankfurter API](https://www.frankfurter.app/), not today's rate and not a fixed constant. This matters for margin accuracy: a unit acquired eight months ago should have its cost basis computed at the exchange rate that actually applied then.
 
 Two pricing paths, user's choice:
 - **By markup %**: Selling Price (INR) = Total Cost (INR) × (1 + markup), Selling Price (USD) derives from that

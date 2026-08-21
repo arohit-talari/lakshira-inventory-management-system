@@ -16,7 +16,7 @@ Lakshira was running entirely on a hand-edited spreadsheet: no validation, no au
 |---|---|
 | System of record | Google Sheets, via `gspread` |
 | CLI / business logic | Python (`questionary` for interactive prompts, `phonenumbers` for validated international phone entry) |
-| Currency conversion | Live ECB historical exchange rates via the Frankfurter API |
+| Currency conversion | Live European Central Bank (ECB) historical exchange rates via the Frankfurter API |
 | Reporting | `reportlab` (PDF generation), Claude API (AI-written executive summary) |
 | Scheduling | macOS `launchd` (automated monthly/quarterly/annual report generation) |
 | Testing | `pytest`, `pexpect` (drives the interactive CLI through a pty) |
