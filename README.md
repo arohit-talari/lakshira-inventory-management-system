@@ -46,10 +46,10 @@ Inventory tracking was dispersed across 12 separate spreadsheets with no single 
 
 | | |
 |---|---|
-| **Before** | 12 fragmented spreadsheets, no standardized categories, suppliers, or pricing method |
+| **Before** | 12 fragmented spreadsheets, no standardized categories, weave types, suppliers, or pricing method |
 | **Built** | One unified master sheet with standardized reference tables, data validation, conditional formatting, and formula-driven fields |
 | **Documentation** | A full data dictionary and category/supplier reference tables, produced as standalone artifacts |
-| **Impact** | Manual pricing, tested under direct supervision, contained a calculation error roughly 7 times in 10; corrected pricing recovered several thousand dollars in inventory that had been priced below its own cost |
+| **Impact** | Manual pricing, tested under direct supervision, contained a calculation error roughly 7 times out of 10; corrected pricing recovered several thousand dollars in inventory that had been priced below its own cost |
 
 <h3 align="left">3. Data Warehouse</h3>
 
