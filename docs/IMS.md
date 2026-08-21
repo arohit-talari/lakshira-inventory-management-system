@@ -31,7 +31,7 @@ Every write operation follows the same guided shape: look up → validate eligib
 
 ## Requirements validation and UAT
 
-Before this system could be trusted with real customer and financial data, it had to prove it actually solved the business's problem. Passing code wasn't the bar. Validation was run as a structured UAT process: 355 defects identified against business workflows and stakeholder-observed scenarios, each classified by business risk rather than technical severity (23 rated Critical), and each traced back to a specific requirement or a specific gap in how the manual process previously worked. That process, not the code itself, is what turned this from a working script into a system the business could actually depend on.
+Before this system could be trusted with real customer and financial data, it had to prove it actually solved the business's problem. Passing code wasn't the bar. Validation was run as a structured UAT (User Acceptance Testing) process: 355 defects identified against business workflows and stakeholder-observed scenarios, each classified by business risk rather than technical severity (23 rated Critical), and each traced back to a specific requirement or a specific gap in how the manual process previously worked. That process, not the code itself, is what turned this from a working script into a system the business could actually depend on.
 
 **A two-tier, 205-test automated regression suite locks each resolved defect in place:**
 - **130 tests** validating core business logic (pricing calculations, date/aging rules, report metrics) in isolation
