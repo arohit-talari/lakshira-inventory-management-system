@@ -23,9 +23,18 @@ Lakshira was running entirely on a hand-edited spreadsheet: no validation, no au
 
 This is the operational-system stage's own stack. The data warehouse (MySQL/AWS RDS) and BI layer (Tableau) that this system feeds are covered in the main [README](../README.md), not duplicated here.
 
-## The system: 10 operations
+## The Ten Operations
 
-Add Inventory · Edit Inventory Details · Reprice a Unit · Discount Simulator · Manage Reservation · Record a Sale · Record Outstanding Payment · Cancel a Sale · Customer Insights · Generate Report
+1. **Add Inventory**
+2. **Edit Inventory Details**
+3. **Reprice a Unit**
+4. **Discount Simulator**
+5. **Manage Reservation**
+6. **Record a Sale**
+7. **Record Outstanding Payment**
+8. **Cancel a Sale**
+9. **Customer Insights**
+10. **Generate Report**
 
 Every write operation follows the same guided shape: look up → validate eligibility → collect fields one at a time with plain-English error messages → full confirmation summary → explicit confirmation required → write → success message. See [Architecture](ARCHITECTURE.md) for the data model, SKU generation logic, currency handling, and per-operation detail.
 
