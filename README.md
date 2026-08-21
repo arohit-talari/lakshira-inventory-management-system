@@ -6,10 +6,10 @@ My approach stays the same regardless of stage: understand the business and the 
 
 ```mermaid
 flowchart LR
-    A[Stakeholder Discovery] --> B[Data Foundation]
-    B --> C[Data Warehouse]
-    C --> D[Business Intelligence]
-    D --> E[Operational System]
+    A["`**Stakeholder Discovery**`"] --> B["`**Data Foundation**`"]
+    B --> C["`**Data Warehouse**`"]
+    C --> D["`**Business Intelligence**`"]
+    D --> E["`**Operational System**`"]
     E -.->|surfaces new needs| B
 ```
 
@@ -63,9 +63,40 @@ A unified sheet still couldn't answer ad hoc business questions at scale, so a P
 | **Status** | Built and running; ETL codebase not yet published as a separate repo |
 | **Impact** | Ad hoc business questions that once took hours of manual spreadsheet review, e.g. supplier profitability or cash tied up in aging stock, are now answered in seconds |
 
-The schema was designed before a line of the pipeline was written, not reverse-engineered from the code after the fact:
+```mermaid
+flowchart TD
+    subgraph DF["`**Data Foundation**`"]
+        A["Google Sheets / Excel"]
+    end
 
-![Entity-relationship diagram: category, supplier, and customer tables feeding into inventory, which feeds into transaction](docs/erd.png)
+    subgraph ETL["`**ETL Pipeline**`"]
+        direction TB
+        X["`**Extract**<br>Sheets API (gspread)`"] --> Y["`**Transform**<br>Python (pandas)`"] --> Z["`**Load**<br>mysql.connector`"]
+    end
+
+    subgraph DW["`**Data Warehouse**`"]
+        C[("MySQL, AWS RDS")]
+    end
+
+    subgraph BI["`**Business Intelligence**`"]
+        D["`3-Dashboard<br>Tableau Workbook`"]
+    end
+
+    subgraph EDA["`**Exploratory Data Analysis**`"]
+        E["`Descriptive &<br>Diagnostic Analytics +<br>Ad Hoc, via MySQL`"]
+    end
+
+    DF --> ETL
+    ETL --> DW
+    DW --> BI
+    DW --> EDA
+```
+
+*The pipeline runs on an automated daily schedule via cron; Tableau is refreshed from periodic MySQL exports rather than a live connection.*
+
+*Note: the schema was designed with a full Entity-Relationship Diagram (ERD) before a line of the pipeline was written, not reverse-engineered from the code after the fact.*
+
+[View the ERD](docs/erd.png)
 
 <h3 align="left">4. Business Intelligence & Analytics</h3>
 
@@ -93,4 +124,4 @@ The data and analytics foundation still left a gap. The owner was already juggli
 
 ---
 
-*Real customer, supplier, and financial data are not included anywhere in this repo, and specific business findings and figures from the engagement are documented in a private report for the client instead of published here, standard confidentiality practice for a real, operating business, not a reflection on the work or its results. Figures above are either aggregate counts (record/table counts) or reference values seeded with placeholder data of the same shape as production.*
+*Note: real customer, supplier, and financial data are not included anywhere in this repo, and specific business findings and figures from the engagement are documented in a private report for the client instead of published here, standard confidentiality practice for a real, operating business, not a reflection on the work or its results. Figures above are either aggregate counts (record/table counts) or reference values seeded with placeholder data of the same shape as production.*

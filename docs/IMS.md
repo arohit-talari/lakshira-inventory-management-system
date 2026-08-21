@@ -114,4 +114,4 @@ docs/
 
 ---
 
-*Supplier and customer data are not included anywhere in this repo. The system's only data store is Google Sheets (and, downstream, the business's own MySQL warehouse), never this codebase. Specific business findings and figures from the engagement are documented in a private report for the client instead of published here, standard confidentiality practice for an operating business, not a reflection on the work or its results. A few reference values (e.g. the supplier list) are seeded with placeholder data of the same shape as production for demonstration purposes.*
+*Note: supplier and customer data are not included anywhere in this repo. The system's only data store is Google Sheets (and, downstream, the business's own MySQL warehouse), never this codebase. Specific business findings and figures from the engagement are documented in a private report for the client instead of published here, standard confidentiality practice for an operating business, not a reflection on the work or its results. A few reference values (e.g. the supplier list) are seeded with placeholder data of the same shape as production for demonstration purposes.*
