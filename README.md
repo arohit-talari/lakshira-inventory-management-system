@@ -120,7 +120,7 @@ The data and analytics foundation still left a gap: the owner, already juggling 
 | **Built with** | Python, in collaboration with Claude Code |
 | **Impact** | Removed day-to-day dependence on the analyst for pricing and discount decisions, replacing ad hoc requests with self-serve tools grounded in real margin thresholds |
 
-[IMS](docs/IMS.md) **·** [Architecture](docs/ARCHITECTURE.md)
+[Inventory Management System](docs/IMS.md) **·** [Architecture](docs/ARCHITECTURE.md)
 
 ---
 
