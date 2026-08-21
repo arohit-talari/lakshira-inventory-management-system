@@ -104,7 +104,7 @@ Once the warehouse was built and a string of descriptive and diagnostic queries 
 
 | | |
 |---|---|
-| **Dashboards** | Business Overview · Customer Intelligence · Inventory & Operations (22 KPIs and visualizations total) |
+| **Dashboards** | Business Overview · Inventory & Operations · Customer Intelligence |
 | **Analytics** | Sell-through rate, dead stock/markdown, inventory health & turnover, supplier performance, pricing effectiveness, margin-bucket distribution |
 | **Status** | Built and in use; not published publicly, since it surfaces real business figures |
 | **Impact** | Visibility into inventory-aging risk directly changed intake behavior; the following month became the business's best on record |
