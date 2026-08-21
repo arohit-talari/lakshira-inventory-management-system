@@ -1,6 +1,6 @@
 # Lakshira Inventory Management System
 
-*Part of the [Lakshira project](../README.md). This is the deep dive on the operational-system stage specifically; start at the main README for the full lifecycle: discovery, data foundation, warehouse, BI, and this system.*
+*Part of the [Lakshira engagement](../README.md). This is the deep dive on the operational-system stage specifically; start at the main README for the full lifecycle: discovery, data foundation, warehouse, BI, and this system.*
 
 A terminal-based inventory, sales, and business-intelligence system built for Lakshira Handwoven Weaves, a small handloom textile business, replacing manual spreadsheet editing with a guided, validated CLI.
 
@@ -27,7 +27,7 @@ This is the operational-system stage's own stack. The data warehouse (MySQL/AWS 
 
 Add Inventory · Edit Inventory Details · Reprice a Unit · Discount Simulator · Manage Reservation · Record a Sale · Record Outstanding Payment · Cancel a Sale · Customer Insights · Generate Report
 
-Every write operation follows the same guided shape: look up → validate eligibility → collect fields one at a time with plain-English error messages → full confirmation summary → explicit confirmation required → write → success message. See [ARCHITECTURE.md](ARCHITECTURE.md) for the data model, SKU generation logic, currency handling, and per-operation detail.
+Every write operation follows the same guided shape: look up → validate eligibility → collect fields one at a time with plain-English error messages → full confirmation summary → explicit confirmation required → write → success message. See [Architecture](ARCHITECTURE.md) for the data model, SKU generation logic, currency handling, and per-operation detail.
 
 ## Requirements validation and UAT
 
@@ -60,7 +60,7 @@ The validation effort above was run as a structured DMAIC cycle, the same framew
 - **Measure**: 355 defects identified and prioritized by business risk (23 Critical), against a 205-test suite establishing a repeatable baseline instead of ad hoc spot-checks.
 - **Analyze**: every defect was root-caused against the actual business workflow it broke, never just patched at the symptom. A reporting mismatch, for example, was traced back to specific incomplete source records rather than written off as noise.
 - **Improve**: each defect resolved at its root cause, with the underlying process changed so the same class of issue can't recur. Fixing the immediate instance alone wasn't the goal.
-- **Control**: every fix locked behind a permanent regression test, re-run before any future change, functioning as this project's control mechanism in place of a physical control chart.
+- **Control**: every fix locked behind a permanent regression test, re-run before any future change, functioning as the control mechanism in place of a physical control chart.
 
 **Specific Lean Six Sigma tools applied here, beyond DMAIC as a label:**
 

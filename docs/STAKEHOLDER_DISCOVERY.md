@@ -1,6 +1,6 @@
 # Discovery & Requirements: Interview Framework
 
-This is the question framework used to run a combined stakeholder discovery and requirements-gathering session, Stage 1 of the full [Lakshira project](../README.md) and the process behind [ARCHITECTURE.md](ARCHITECTURE.md), not just its output.
+This is the question framework used to run a combined stakeholder discovery and requirements-gathering session, Stage 1 of the full [Lakshira engagement](../README.md) and the process behind [Architecture](ARCHITECTURE.md), not just its output.
 
 The stakeholder's actual answers are not included here. They contain real financial figures, customer and supplier specifics, and other business-confidential detail that isn't appropriate to publish. What's shown is the methodology: how the conversation was structured to move from "how does this business actually work today" to "what does a system need to do about it," in a single session appropriate to a one-person engagement with a single decision-maker.
 
@@ -85,4 +85,4 @@ The session ran as a free-flowing conversation, not an interrogation: starting w
 
 ---
 
-*This framework, run once as a single combined session, directly informed the data model and the 10 operations described in [ARCHITECTURE.md](ARCHITECTURE.md). Every one of those decisions traces back to a specific answer given here.*
+*This framework, run once as a single combined session, directly informed the data model and the 10 operations described in [Architecture](ARCHITECTURE.md). Every one of those decisions traces back to a specific answer given here.*

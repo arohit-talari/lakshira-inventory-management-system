@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes how the system is built and why: the data model, the pricing/currency logic, and the design decisions behind each operation. For setup and usage, see [IMS.md](IMS.md); for the full project lifecycle this system is one stage of, see the main [README](../README.md).
+This document describes how the system is built and why: the data model, the pricing/currency logic, and the design decisions behind each operation. For setup and usage, see [IMS](IMS.md); for the full engagement lifecycle this system is one stage of, see the main [README](../README.md).
 
 ---
 

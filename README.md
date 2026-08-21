@@ -120,7 +120,7 @@ The data and analytics foundation still left a gap. The owner was already juggli
 | **Built with** | Python, in collaboration with Claude Code |
 | **Impact** | Removed day-to-day reliance on manual analyst involvement for pricing and discount decisions, replacing ad hoc requests with self-serve tools grounded in real margin thresholds |
 
-[Project README](docs/IMS.md) **·** [Architecture](docs/ARCHITECTURE.md)
+[IMS](docs/IMS.md) **·** [Architecture](docs/ARCHITECTURE.md)
 
 ---
 
