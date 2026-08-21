@@ -2,13 +2,13 @@
 
 *Part of the [Lakshira engagement](../README.md). This is the deep dive on the operational-system stage specifically; refer to the main README for the full lifecycle: discovery, data foundation, warehouse, BI, and this system.*
 
-The Inventory Management System is a terminal-based Command-Line Interface (CLI) for inventory, sales, and business intelligence at Lakshira Handwoven Weaves, a small, rapidly growing handloom textile business, replacing repetitive manual spreadsheet input and editing with a guided, validated interface built for a non-technical user.
+The Inventory Management System (IMS) is a terminal-based Command-Line Interface (CLI) for inventory, sales, and business intelligence at Lakshira Handwoven Weaves, a small, rapidly growing handloom textile business, replacing repetitive manual spreadsheet input and editing with a guided, validated interface built for a non-technical user.
 
 Designed and directed by Arohit Talari: every design decision, bug fix, and test in this repo was specified and validated across a multi-week working session, with **Claude Code** as the execution layer translating that direction into working code, not a one-shot generation. The commit history and the testing section below reflect that iterative process directly.
 
 ## Why this exists
 
-A production textile business was running entirely on a hand-edited Google Sheet: no validation, no audit trail, error-prone manual entry, and no way to answer basic questions like "what's our margin trending toward" without opening a spreadsheet and doing math by hand. This system is a lightweight, purpose-built alternative to a commercial ERP/CRM. Most small businesses reach for QuickBooks, Zoho, or a Shopify-plus-spreadsheet combo; this does the equivalent job (inventory lifecycle, sales pipeline, customer relationship history, financial reporting) shaped around how this specific business operates, at a fraction of the integration cost.
+Lakshira was running entirely on a hand-edited spreadsheet: no validation, no audit trail, error-prone manual entry, and no way to answer basic questions like "what's our margin trending toward?" without opening a spreadsheet and doing the math by hand. The IMS is a lightweight, purpose-built alternative to a commercial Enterprise Resource Planning (ERP) / Customer Relationship Management (CRM) system. Most small businesses reach for paid software: QuickBooks, Zoho, or an integrated ERP/CRM tied to their Shopify storefront; the IMS does the equivalent (inventory lifecycle, end-to-end sales workflow, customer insights, financial reporting) shaped around how this specific business operates, at a fraction of the integration cost.
 
 ## Tech stack
 
