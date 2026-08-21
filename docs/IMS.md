@@ -2,7 +2,7 @@
 
 *Part of the [Lakshira engagement](../README.md). This is the deep dive on the operational-system stage specifically; refer to the main README for the full lifecycle: discovery, data foundation, warehouse, BI, and this system.*
 
-A terminal-based inventory, sales, and business-intelligence system built for Lakshira Handwoven Weaves, a small handloom textile business, replacing manual spreadsheet editing with a guided, validated CLI.
+The Inventory Management System is a terminal-based Command-Line Interface (CLI) for inventory, sales, and business intelligence at Lakshira Handwoven Weaves, a small, rapidly growing handloom textile business, replacing repetitive manual spreadsheet input and editing with a guided, validated interface built for a non-technical user.
 
 Built almost entirely in collaboration with **Claude Code**: every design decision, bug fix, and test in this repo was driven through a multi-week working session with an AI pair-programmer, not a one-shot generation. The commit history and the testing section below reflect that iterative process directly.
 
