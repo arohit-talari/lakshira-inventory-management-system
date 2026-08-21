@@ -2,7 +2,7 @@
 
 An end-to-end data and systems engagement for a real small business: a handloom textile brand with no data infrastructure, rapid organic growth it couldn't measure, and an ambition to reach luxury-boutique scale. This repo documents the full build, stage by stage: from the discovery work that scoped the problem through the operational system now running the business day to day.
 
-My approach stays the same regardless of stage: understand the business and the question before touching a tool. Each stage below was built on what the one before it established, staged and sequential, not in parallel and not out of order. But it isn't a one-shot pipeline: using the system in Business Intelligence and the Operational System keeps surfacing new data needs that loop back into Data Foundation, which then flows forward again.
+My approach stays the same regardless of stage: understand the business and the question before touching a tool. Each stage below builds on what the one before it established, in order, not in parallel. But it isn't a one-shot pipeline: using Business Intelligence and the Operational System keeps surfacing new data needs that loop back into Data Foundation, which then flows forward again.
 
 ```mermaid
 flowchart LR
@@ -17,8 +17,8 @@ flowchart LR
 
 | | |
 |---|---|
-| **`docs/`** | The write-ups and diagrams: how the system works, what it does, how the requirements behind it were gathered, and the database schema it's built on |
-| **`inventory_management_system/`** | The actual system: its code, the fonts/logo used in generated reports, and a template for its settings |
+| **`docs/`** | The write-ups and diagrams: how the system works, what it does, how its requirements were gathered, and the database schema it's built on |
+| **`inventory_management_system/`** | The actual system: its code, the fonts and logo used in generated reports, and a settings template |
 | **`tests/`** | 205 automated checks that confirm the system still works correctly every time something changes |
 | **`requirements.txt`** | The list of external tools the system needs installed to run |
 | **`pytest.ini`** | Configuration for running the automated tests |
