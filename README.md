@@ -28,12 +28,12 @@ flowchart LR
 
 <h3 align="left">1. Discovery & Requirements</h3>
 
-Before any recommendation was made, a structured stakeholder interview mapped how the business actually operated: a single combined session covering current-state workflow, pain points, customers, suppliers, financials, and growth goals, appropriate to a one-person engagement with a single decision-maker. That was followed by a formal audit of the data behind the business's rapid growth, which made the real problem concrete. The business had grown faster than its own ability to track and understand itself, and that gap, not a lack of tooling, was the actual ceiling on its growth.
+Before any recommendation was made, a structured stakeholder discovery and requirements-gathering session mapped how the business actually operated: a single combined session covering current-state workflow, pain points, customers, suppliers, financials, growth goals, and current data and tools, appropriate to a one-person engagement with a single decision-maker. That was then followed by a formal audit of the data behind the business's rapid growth, which surfaced the core problem. The business had grown faster than its own ability to track and understand itself, and that gap, not a lack of tooling, was the actual ceiling on its growth.
 
 | | |
 |---|---|
 | **Method** | Structured 7-section stakeholder interview, run as a conversation, not a script |
-| **Scope** | 45 questions across current-state workflow, pain points, customers, suppliers, financials, and growth goals |
+| **Scope** | 45 questions across current-state workflow, pain points, customers, suppliers, financials, growth goals, and current data and tools |
 | **Audit** | A formal data-quality audit logging 44 specific pre-existing issues before a line of the new system was built |
 | **Output** | Findings that directly shaped the data model, the analytics built, and the 10 operations scoped into the system below |
 | **Impact** | Self-reported inventory count was found to understate actual holdings by roughly half once every source was located |
