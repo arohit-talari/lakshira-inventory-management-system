@@ -116,7 +116,7 @@ The data and analytics foundation still left a gap: the owner, already juggling 
 | | |
 |---|---|
 | **Operations** | 10, covering the full inventory-to-sale-to-reporting lifecycle |
-| **Quality assurance** | 355 defects resolved (23 Critical) via structured UAT, backed by a 205-test automated regression suite |
+| **Quality Assurance** | 355 defects resolved (23 Critical) via structured UAT, backed by a 205-test automated regression suite |
 | **Built with** | Python, in collaboration with Claude Code |
 | **Impact** | Removed day-to-day reliance on manual analyst involvement for pricing and discount decisions, replacing ad hoc requests with self-serve tools grounded in real margin thresholds |
 
