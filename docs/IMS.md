@@ -38,7 +38,7 @@ This is the operational-system stage's own stack. The data warehouse (MySQL/AWS 
 
 Every write operation follows the same guided shape: look up → validate status/eligibility → collect fields one at a time → show a full confirmation summary → require explicit confirmation → write → confirm success. Errors surface in plain English at the point of entry, not after the fact. See [Architecture](ARCHITECTURE.md) for the data model, SKU generation logic, currency handling, and per-operation detail.
 
-## Requirements validation and UAT
+## Validation and Testing
 
 Before this system could go live and be trusted with real customer and financial data, it had to be rigorously tested to ensure it solved the business's core problem. Architecting and designing all the operations and business logic the system would depend on wasn't the bar. Validation was run through a structured UAT (User Acceptance Testing) process, which surfaced 355 defects against business workflows and stakeholder-observed scenarios, each classified by business risk rather than technical severity (23 assessed as Critical), and each traced back to a specific requirement or a specific gap in how the manual process previously worked. That process is what transformed a working script that could theoretically handle the business's workflows into a system the stakeholder could actually depend on for day-to-day operations.
 
