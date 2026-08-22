@@ -61,9 +61,9 @@ One specific risk that discipline caught: because more than one person can act o
 - A discount-removal flow that didn't re-validate pricing after the discount was reversed
 - A payment-status option offered in a scenario where it was mathematically impossible to fulfill
 
-## Process improvement: Lean Six Sigma applied to defect management
+## Lean Six Sigma: DMAIC Applied to Defect Management
 
-The validation effort above was run as a structured DMAIC cycle, the same framework used to drive process improvement on the business side of this engagement, applied here to closing the gap between the manual process and the delivered system:
+The validation effort above was run as a structured DMAIC (Define, Measure, Analyze, Improve, Control) cycle, closing the gap between the manual process and the delivered system:
 
 - **Define**: the manual, hand-edited spreadsheet was the source of the defects being eliminated: no validation, no audit trail, silent data-entry errors, no repeatable reporting process.
 - **Measure**: 355 defects identified and prioritized by business risk (23 Critical), against a 205-test suite establishing a repeatable baseline instead of ad hoc spot-checks.
@@ -76,7 +76,6 @@ The validation effort above was run as a structured DMAIC cycle, the same framew
 - **Poka-yoke (mistake-proofing)**: every constrained business field (status, category, weave type, sales channel) is a validated pick-list, never free text. An entire class of data-entry defect is made structurally impossible, no longer just discouraged.
 - **Standardized work**: all 10 operations follow an identical look-up → validate → collect → confirm → commit pattern, so the system behaves predictably for a non-technical user regardless of which task they're performing.
 - **Waste elimination (Muda)**: manual cross-referencing and calculation (motion/waiting waste) replaced by automation; recurring data-entry defects (defect waste) prevented at the point of entry; a report that once required manually compiling numbers across tabs now generates on demand.
-- **Root cause analysis**: every defect traced to its actual origin in the business process before a fix was specified, never just its symptom.
 - **Kaizen (continuous improvement)**: the system evolved through repeated audit → fix → validate cycles across the engagement rather than one large rewrite.
 
 The implementation itself, how each fix was written into the codebase, was directed AI-assisted development through Claude Code, reviewed and validated at every step against the criteria above; see the repository code and test suite for that layer directly.
