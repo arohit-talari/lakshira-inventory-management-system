@@ -47,7 +47,7 @@ Before this system could go live and be trusted with real customer and financial
 - **75 tests** driving the full guided workflow end-to-end against a live test environment, covering all 10 operations: correct-path completion, appropriate rejection of invalid states, validation-error handling, and cancellation paths
 
 That validation effort covered four distinct kinds of ground:
-- **Functional**: every operation's core flow, verified against data state after each write
+- **Functional**: every operation's core workflow, verified against data state after each write
 - **Edge case / real-world data conditions**: currency values formatted the way the business actually enters them, below-cost pricing, incomplete cost/price data, discount edge cases, four-figure outstanding balances
 - **Regression**: every defect below is locked behind a dedicated test, so a resolved issue can't silently reappear
 - **Stakeholder UAT**: email delivery and generated report content were verified directly by the business owner against production data, both the live system of record and the independent data warehouse, beyond automated checks alone
