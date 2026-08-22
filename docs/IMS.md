@@ -74,9 +74,9 @@ The validation effort above was run as a structured DMAIC (Define, Measure, Anal
 **Specific Lean Six Sigma tools applied here, beyond DMAIC as a label:**
 
 - **Poka-yoke (mistake-proofing)**: every constrained business field (status, category, weave type, sales channel) is a validated pick-list, never free text. An entire class of data-entry defect is made structurally impossible, no longer just discouraged.
-- **Standardized work**: all 10 operations follow an identical look-up → validate → collect → confirm → commit pattern, so the system behaves predictably for a non-technical user regardless of which task they're performing.
+- **Standardized work**: all 10 operations follow an identical structure: look up → validate → collect → confirm → write, so the system behaves predictably for a non-technical user regardless of which task they're performing.
 - **Waste elimination (Muda)**: manual cross-referencing and calculation (motion/waiting waste) replaced by automation; recurring data-entry defects (defect waste) prevented at the point of entry; a report that once required manually compiling numbers across tabs now generates on demand.
-- **Kaizen (continuous improvement)**: the system evolved through repeated audit → fix → validate cycles across the engagement rather than one large rewrite.
+- **Kaizen (continuous improvement)**: the system evolved across the engagement through a repeated structure: audit → fix → validate, rather than one large rewrite.
 
 The implementation itself, how each fix was written into the codebase, was directed AI-assisted development through Claude Code, reviewed and validated at every step against the criteria above; see the repository code and test suite for that layer directly.
 
