@@ -46,13 +46,13 @@ Before this system could go live and be trusted with real customer and financial
 - **130 tests** validating core business logic (pricing calculations, date/aging rules, report metrics) in isolation
 - **75 tests** driving the full guided workflow end-to-end against a live test environment, covering all 10 operations: correct-path completion, appropriate rejection of invalid states, validation-error handling, and cancellation paths
 
-**Validation coverage:**
+That validation effort covered four distinct kinds of ground:
 - **Functional**: every operation's core flow, verified against data state after each write
 - **Edge case / real-world data conditions**: currency values formatted the way the business actually enters them, below-cost pricing, incomplete cost/price data, discount edge cases, four-figure outstanding balances
 - **Regression**: every defect below is locked behind a dedicated test, so a resolved issue can't silently reappear
 - **Stakeholder UAT**: email delivery and generated report content were verified directly by the business owner against production data, both the live system of record and the independent data warehouse, beyond automated checks alone
 
-**Concurrency risk, identified and resolved:** because more than one person can act on the same inventory record at once, every write was required to detect and reject a conflicting concurrent change rather than silently overwrite it, verified directly with two simultaneous sessions attempting to edit the same unit.
+One specific risk that discipline caught: because more than one person can act on the same inventory record at once, every write was required to detect and reject a conflicting concurrent change rather than silently overwrite it, verified directly with two simultaneous sessions attempting to edit the same unit. See [Architecture](ARCHITECTURE.md#7-concurrency-safety) for how this is actually implemented.
 
 **Defects this process surfaced, each now closed with a permanent regression test:**
 - A repricing workflow that failed on every attempt, traced to a business-logic gap in how one pricing path was handled
