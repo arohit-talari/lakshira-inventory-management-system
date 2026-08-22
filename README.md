@@ -2,7 +2,7 @@
   <img src="inventory_management_system/assets/lakshira_logo.png" width="300" alt="Lakshira Handwoven Weaves logo">
 </p>
 
-<h1 align="center">Lakshira Handwoven Weaves: Data & Systems Build</h1>
+<h1 align="center">Lakshira Handwoven Weaves: Data and Systems Build</h1>
 
 An end-to-end data and systems engagement for a real small business: a handloom textile brand with no data infrastructure, rapid organic growth it couldn't measure, and an ambition to reach luxury-boutique scale. This repo documents the full build, stage by stage: from the discovery work that scoped the problem through the operational system now running the business day to day.
 
@@ -102,7 +102,7 @@ flowchart TD
 
 [View the ERD](docs/erd.png)
 
-<h3 align="left">4. Business Intelligence & Analytics</h3>
+<h3 align="left">4. Business Intelligence and Analytics</h3>
 
 Once the warehouse was built and a string of descriptive and diagnostic queries had been run against it, it became clear which north-star KPIs and visualizations needed a permanent home to give the owner visibility she never had. A 3-Dashboard Tableau Workbook was built to cover three core areas of the business: Business Overview, Inventory & Operations, and Customer Intelligence. The same retail-specific analytical frameworks feed both the Tableau layer and dedicated tabs on the production sheet, so the insight isn't locked behind one tool.
 
