@@ -78,7 +78,7 @@ The validation effort above was run as a structured DMAIC (Define, Measure, Anal
 - **Waste elimination (Muda)**: manual cross-referencing and calculation (motion/waiting waste) replaced by automation; recurring data-entry defects (defect waste) prevented at the point of entry; a report that once required manually compiling numbers across tabs now generates on demand.
 - **Kaizen (continuous improvement)**: the system evolved across the engagement through a repeated structure: audit → fix → validate, rather than one large rewrite.
 
-The implementation itself, how each fix was written into the codebase, was directed AI-assisted development through Claude Code, reviewed and validated at every step against the criteria above; see the repository code and test suite for that layer directly.
+Every fix started with direct, repeated use of the system, running it against real scenarios thousands of times to surface defects, then specifying the actual fix and the expected outcome before any code was touched. Claude Code was the execution layer that turned those specifications into working code, reviewed and validated at every step against the criteria above; see the repository code and test suite for that layer directly.
 
 ## Running it
 
