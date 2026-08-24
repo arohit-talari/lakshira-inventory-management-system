@@ -14,8 +14,8 @@ It's not a generalized inventory platform. It's this business's own lightweight 
 
 Designed and directed by **Arohit Talari**, the business's analyst and consultant throughout this engagement, with **Claude Code** as the execution layer that translated that direction into working code (see the main [README](../README.md) for the full discovery-through-delivery lifecycle this system is one stage of). The system itself serves:
 
-- **The business owner**: the system's primary daily user, non-technical, runs sourcing, pricing, and sales through the Command-Line Interface (CLI) with no assumed technical background
-- **A non-technical staff user**: runs day-to-day retail operations (customer-facing sales via social/messaging channels), needs the CLI to guide them step by step with no assumed technical knowledge
+- **The business owner**: the system's primary daily user, non-technical, runs sourcing, pricing, and sales through the Command-Line Interface (CLI)
+- **A non-technical staff user**: runs day-to-day retail operations (customer-facing sales via social/messaging channels), needs the CLI to guide them step by step
 - **Future employees**: unknown technical background, every prompt has to explain itself
 
 That constraint, a non-technical primary user, drives most of the UX decisions below: numbered menus instead of free text wherever a value is constrained, a full confirmation summary before every write, plain-English errors instead of raw exceptions, and validated pick-lists instead of type-anything fields.
