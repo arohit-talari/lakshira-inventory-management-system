@@ -56,16 +56,16 @@ Either path recalculates Gross Profit, Markup %, and Margin % automatically, and
 
 ## 6. The Ten Operations
 
-1. **Add Inventory**: new SKU, cost/pricing entry, ECB-rate-derived cost basis
+1. **Add Inventory**: new SKU, cost and pricing entry, ECB-rate-derived cost basis
 2. **Edit Inventory Details**: amend an existing unit's fields, with cost-field edits triggering a full pricing recalculation
 3. **Reprice a Unit**: change an unsold unit's selling price via either pricing path
 4. **Discount Simulator**: model a discount's effect on margin before committing to it, no write to the sheet
 5. **Manage Reservation**: place/release a hold for a specific customer, with overdue-reservation surfacing
-6. **Record a Sale**: the most complex flow, customer capture/matching, discount handling, payment status, below-cost gating
-7. **Record Outstanding Payment**: apply a payment against a partially-paid sale, tracks running balance
+6. **Record a Sale**: the most complex flow, customer capture and matching, discount handling, payment status, below-cost gating
+7. **Record Outstanding Payment**: apply a payment against a partially-paid sale, track running balance
 8. **Cancel a Sale**: reverse a sale, restore the unit to `Available`, track any pending refund
 9. **Customer Insights**: lifetime and period-scoped purchase history, spend, and outstanding balance per customer
-10. **Generate Report**: a full PDF business-intelligence report (revenue, margin, inventory turnover, customer retention, aging/dead-stock, accounts receivable), with a structured Claude API executive summary and optional email delivery
+10. **Generate Report**: a full PDF business-intelligence report (revenue, margin, inventory turnover, customer retention, aging and dead-stock, accounts receivable), with a structured Claude API executive summary and optional email delivery
 
 Every write operation follows the same shape: look up, validate status/eligibility, collect fields one at a time, show a full confirmation summary, require explicit confirmation, write, confirm success. Nothing is written to the sheet without that final confirmation step.
 
