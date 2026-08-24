@@ -34,7 +34,7 @@ The master sheet has 39 columns. A few worth calling out:
 | Days to Sell / Days in Inventory / Aging Bucket / Dead Stock Flag | Formula-driven in the sheet itself; the script reads these, never writes them |
 | Status | Constrained to a fixed set (`Available`, `Reserved`, `Sold`, `Sold - Partial Payment`, `Unassigned`), never free text |
 
-The `Unassigned` status is a deliberate design choice: a SKU can be generated in sequence with no physical unit behind it yet, preserving the numbering sequence without corrupting cost/pricing columns with placeholder data.
+The `Unassigned` status is a deliberate design choice: a SKU can be generated in sequence with no physical unit behind it yet, preserving the numbering sequence without corrupting cost and pricing columns with placeholder data.
 
 ## 4. SKU Generation
 
