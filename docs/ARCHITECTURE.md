@@ -84,4 +84,4 @@ A single `MODE` variable at the top of `inventory.py` switches the entire system
 - Lets a user type a SKU or category code by hand
 - Overwrites the append-only note columns; every note action appends, never replaces
 - Assigns a category code that's already mapped to a different weave type
-- Sends customer data through anything other than the sheet API itself: no data lake, no analytics SDK, no third-party storage of PII beyond the sheet and the business's own MySQL warehouse
+- Sends customer Personally Identifiable Information (PII) through anything other than the sheet API itself: no data lake, no analytics Software Development Kit (SDK), no third-party storage beyond the sheet and the business's own MySQL warehouse
