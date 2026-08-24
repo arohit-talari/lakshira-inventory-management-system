@@ -100,8 +100,8 @@ python3 inventory_management_system/inventory.py
 Run the test suite:
 
 ```bash
-pytest tests/ -v                              # Tier 1 -- instant, no live dependencies
-pytest tests/test_interactive_*.py -v -s       # Tier 2 -- needs TEST_SHEET_ID configured
+pytest tests/ -v --ignore-glob="tests/test_interactive_*.py"   # Tier 1 -- instant, no live dependencies
+pytest tests/test_interactive_*.py -v -s                        # Tier 2 -- needs TEST_SHEET_ID configured
 ```
 
 ## Repository structure
