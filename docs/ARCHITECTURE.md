@@ -65,7 +65,7 @@ Either path recalculates Gross Profit, Markup %, and Margin % automatically, and
 7. **Record Outstanding Payment**: apply a payment against a partially-paid sale, tracks running balance
 8. **Cancel a Sale**: reverse a sale, restore the unit to `Available`, track any pending refund
 9. **Customer Insights**: lifetime and period-scoped purchase history, spend, and outstanding balance per customer
-10. **Generate Report**: a full PDF business-intelligence report (revenue, margin, inventory turnover, customer retention, aging/dead-stock, accounts receivable), with an AI-written executive summary and optional email delivery
+10. **Generate Report**: a full PDF business-intelligence report (revenue, margin, inventory turnover, customer retention, aging/dead-stock, accounts receivable), with a structured Claude API executive summary and optional email delivery
 
 Every write operation follows the same shape: look up, validate status/eligibility, collect fields one at a time, show a full confirmation summary, require explicit confirmation, write, confirm success. Nothing is written to the sheet without that final confirmation step.
 

@@ -109,7 +109,7 @@ pytest tests/test_interactive_*.py -v -s                        # Tier 2 -- need
 ```
 inventory_management_system/
   inventory.py             # the CLI -- all 10 operations
-  generate_report.py       # PDF report generation + AI executive summary
+  generate_report.py       # PDF report generation + structured executive summary via the Claude API
   report_config.py         # reporting configuration (fonts, brand colors, secrets loading)
   scheduler.py             # automated report scheduling (macOS launchd)
   assets/                  # fonts and logo used by generated PDF reports
