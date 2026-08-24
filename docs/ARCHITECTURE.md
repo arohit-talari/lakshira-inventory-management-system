@@ -6,7 +6,7 @@ This document describes how the Inventory Management System is built and why: th
 
 ## 1. What This System Is
 
-A terminal-based inventory, sales, and reporting system built for a small handwoven-textile business, backed by a Google Sheet acting as the system of record. It replaces direct spreadsheet editing for anyone who needs to touch inventory data, reducing data-entry errors, enforcing business rules a spreadsheet can't enforce on its own, and giving the business owner reporting a spreadsheet alone can't produce.
+A terminal-based inventory, sales, and reporting system built for Lakshira Handwoven Weaves, a small handwoven-textile business, backed by a Google Sheet acting as the System of Record. It replaces manual spreadsheet editing for anyone who needs to touch inventory data, reducing data-entry errors, enforcing business rules a spreadsheet has no way to apply on its own, and giving the business owner a reporting layer a spreadsheet alone can't produce.
 
 It's not a generalized inventory platform. It's shaped specifically around one business's operations: markup-based pricing derived from a live foreign-exchange rate, a per-category SKU numbering scheme, and sales that close across Instagram, WhatsApp, in-person exhibitions, and (eventually) a storefront.
 
