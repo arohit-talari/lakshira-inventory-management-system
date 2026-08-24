@@ -26,13 +26,13 @@ The master sheet has 39 columns. A few worth calling out:
 
 | Column | Entry method |
 |---|---|
-| SKU | Auto-generated, never user-entered (see §4) |
-| Category Code | Auto-assigned from weave type selection, a 1:1 mapping, enforced |
-| Total Cost (USD) | Derived: Total Cost (INR) ÷ ECB rate on acquisition date |
-| Selling Price (USD/INR) | User provides one, the other two derive from it (see §5) |
-| Gross Profit / Markup % / Margin % | All derived, never entered directly |
-| Days to Sell / Days in Inventory / Aging Bucket / Dead Stock Flag | Formula-driven in the sheet itself; the script reads these, never writes them |
-| Status | Constrained to a fixed set (`Available`, `Reserved`, `Sold`, `Sold - Partial Payment`, `Unassigned`), never free text |
+| **SKU** | Auto-generated, never user-entered (see §4) |
+| **Category Code** | Auto-assigned from weave type selection, a 1:1 mapping, enforced |
+| **Total Cost (USD)** | Derived: Total Cost (INR) ÷ ECB rate on acquisition date |
+| **Selling Price (USD/INR)** | User provides one, the other two derive from it (see §5) |
+| **Gross Profit / Markup % / Margin %** | All derived, never entered directly |
+| **Days to Sell / Days in Inventory / Aging Bucket / Dead Stock Flag** | Formula-driven in the sheet itself; the script reads these, never writes them |
+| **Status** | Constrained to a fixed set (`Available`, `Reserved`, `Sold`, `Sold - Partial Payment`, `Unassigned`), never free text |
 
 The `Unassigned` status is a deliberate design choice: a SKU can be generated in sequence with no physical unit behind it yet, preserving the numbering sequence without corrupting cost and pricing columns with placeholder data.
 
