@@ -21,7 +21,7 @@ Lakshira was running entirely on a hand-edited spreadsheet: no validation, no au
 | Scheduling | macOS `launchd` (automated monthly/quarterly/annual report generation) |
 | Testing | `pytest`, `pexpect` (drives the interactive CLI through a pseudo-terminal, or pty) |
 
-This is the operational-system stage's own stack. The data warehouse (MySQL/AWS RDS) and BI layer (Tableau) that this system feeds are covered in the main [README](../README.md), not duplicated here.
+This is the operational-system stage's own stack. The data warehouse (MySQL/AWS RDS) and BI layer (Tableau) that this system feeds are covered in [Lakshira's Data and Systems Build README](../README.md), not duplicated here.
 
 ## The Ten Operations
 
