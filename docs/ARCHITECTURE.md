@@ -75,7 +75,7 @@ More than one person can touch the same record at once: two staff members, or th
 
 ## 8. Test/Live Mode
 
-A single `MODE` variable at the top of `inventory.py` switches the entire system between a test sheet and the production sheet: same code path, different destination. The CLI displays a clear banner on startup so which mode is active is never ambiguous. Sheet IDs are supplied via environment variables, not hardcoded (see `.env.example`).
+A single `MODE` variable at the top of `inventory.py` switches the entire system between a test sheet and the production sheet: same code path, different destination. The CLI displays a clear banner on startup so it's always clear which mode is active. Sheet IDs are supplied via environment variables, not hardcoded (see `.env.example`).
 
 ## 9. What the System Deliberately Never Does
 
