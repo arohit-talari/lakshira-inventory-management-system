@@ -4,7 +4,7 @@
 
 The Inventory Management System (IMS) is a terminal-based Command-Line Interface (CLI) for inventory, sales, and business intelligence at Lakshira Handwoven Weaves, a small, rapidly growing handloom textile business, replacing repetitive manual spreadsheet input and editing with a guided, validated interface built for a non-technical user.
 
-Designed and directed by Arohit Talari: every design decision, bug fix, and test in this repo was specified and validated across a multi-week working session, with **Claude Code** as the execution layer translating that direction into working code, not a one-shot generation. The commit history and the testing section below reflect that iterative process directly.
+Designed and directed by **Arohit Talari**: every design decision, bug fix, and test in this repo was specified and validated across a multi-week working session, with **Claude Code** as the execution layer translating that direction into working code, not a one-shot generation. The commit history and the testing section below reflect that iterative process directly.
 
 ## Why this exists
 
