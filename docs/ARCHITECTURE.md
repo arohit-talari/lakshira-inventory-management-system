@@ -18,7 +18,7 @@ Designed and directed by **Arohit Talari**, the business's analyst and consultan
 - **A non-technical staff user**: runs day-to-day retail operations (customer-facing sales via social/messaging channels), needs the CLI to guide them step by step
 - **Future employees**: unknown technical background, every prompt has to explain itself
 
-That constraint, a non-technical primary user, drives most of the UX decisions below: numbered menus instead of free text wherever a value is constrained, a full confirmation summary before every write, plain-English errors instead of raw exceptions, and validated pick-lists instead of type-anything fields.
+Building the system around the constraint of a non-technical primary user with little-to-no onboarding is what drove most of the User Experience (UX) decisions below: numbered menus instead of free text wherever a value is constrained, a full confirmation summary before every write, plain-English errors instead of raw exceptions, and validated pick-lists instead of type-anything fields.
 
 ## 3. Data Model
 
