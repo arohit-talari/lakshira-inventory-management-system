@@ -118,6 +118,7 @@ tests/                     # 205 tests across both tiers
 docs/
   ARCHITECTURE.md          # data model, SKU logic, currency handling, per-operation detail
   STAKEHOLDER_DISCOVERY.md # the requirements-gathering framework that shaped every decision above
+  erd.png                  # entity-relationship diagram for the MySQL warehouse schema
 ```
 
 ---
