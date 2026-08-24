@@ -10,7 +10,7 @@ My approach stays the same regardless of stage: understand the business and the 
 
 ```mermaid
 flowchart LR
-    A["`**Discovery &amp; Requirements**`"] --> B["`**Data Foundation**`"]
+    A["`**Discovery and Requirements**`"] --> B["`**Data Foundation**`"]
     B --> C["`**Data Warehouse**`"]
     C --> D["`**Business Intelligence**`"]
     D --> E["`**Operational System**`"]
@@ -30,7 +30,7 @@ flowchart LR
 
 <h2 align="left">Stages</h2>
 
-<h3 align="left">1. Discovery & Requirements</h3>
+<h3 align="left">1. Discovery and Requirements</h3>
 
 Before any recommendation was made, a structured stakeholder discovery and requirements-gathering session mapped how the business actually operated: a single combined session covering current-state workflow, pain points, customers, suppliers, financials, growth goals, and current data and tools, appropriate to a one-person engagement with a single decision-maker. That was then followed by a formal audit of the data behind the business's rapid growth, which surfaced the core problem. The business had grown faster than its own ability to track and understand itself, and that gap, not a lack of tooling, was the actual ceiling on its growth.
 
@@ -109,7 +109,7 @@ Once the warehouse was built and a string of descriptive and diagnostic queries 
 | | |
 |---|---|
 | **Dashboards** | Business Overview · Inventory & Operations · Customer Intelligence |
-| **Analytics** | Sell-through rate, dead stock/markdown, inventory health & turnover, supplier performance, pricing effectiveness, margin-bucket distribution |
+| **Analytics** | Sell-through rate, dead stock/markdown, inventory health and turnover, supplier performance, pricing effectiveness, margin-bucket distribution |
 | **Status** | Built and in use; not published publicly, as it surfaces real business figures |
 | **Impact** | Visibility into inventory-aging risk directly changed intake behavior, as the following month became the business's best on record among sales with a confirmed date |
 

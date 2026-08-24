@@ -1,4 +1,4 @@
-# Discovery & Requirements: Interview Framework
+# Discovery and Requirements: Interview Framework
 
 This is the question framework used to run a combined stakeholder discovery and requirements-gathering session, Stage 1 of the full [Lakshira engagement](../README.md) and the process behind **Operational System**'s [Architecture](ARCHITECTURE.md), not just its output.
 
