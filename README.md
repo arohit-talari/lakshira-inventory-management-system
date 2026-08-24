@@ -87,7 +87,7 @@ flowchart TD
     end
 
     subgraph EDA["`**Exploratory Data Analysis**`"]
-        E["`Descriptive &<br>Diagnostic Analytics +<br>Ad Hoc, via MySQL`"]
+        E["`Descriptive and<br>Diagnostic Analytics +<br>Ad Hoc, via MySQL`"]
     end
 
     DF --> ETL
