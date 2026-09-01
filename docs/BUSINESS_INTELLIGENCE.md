@@ -4,7 +4,7 @@
 
 The Business Intelligence (BI) layer is a 3-View Tableau Workbook built on top of the MySQL warehouse: Business Overview, Inventory & Operations, and Customer Intelligence. This document covers the design reasoning behind it, not just what it shows: why a dashboard was needed at all once an operational system already existed, why three views instead of one, and how filters and dimensions are used deliberately rather than added for their own sake.
 
-The dashboard design below, every KPI, calculation, chart, and filter, is identical to what the client uses in her own weekly workflow. Only the data differs: these screenshots are from a sanitized, fully synthetic version of the workbook (see the [companion architecture doc](BUSINESS_INTELLIGENCE_ARCHITECTURE.md) for how that dataset was built), so no real customer, supplier, or financial figures appear anywhere in this repo.
+The dashboard design below, every KPI, calculation, chart, and filter, is identical to what the client uses in her own weekly workflow. Only the data differs: these screenshots come from a sanitized, fully synthetic version of the workbook, so no real customer, supplier, or financial figures appear anywhere in this repo. See [Business Intelligence Architecture](BUSINESS_INTELLIGENCE_ARCHITECTURE.md) for how that synthetic dataset was built.
 
 <p align="center"><img src="images/business_overview.png" width="800" alt="Business Overview dashboard"></p>
 <p align="center"><img src="images/inventory_operations.png" width="800" alt="Inventory & Operations dashboard"></p>
