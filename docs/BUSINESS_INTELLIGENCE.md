@@ -2,7 +2,7 @@
 
 *Part of the [Lakshira engagement](../README.md). This is the deep dive on the Business Intelligence stage specifically; refer to the main README for the full lifecycle: discovery, data foundation, warehouse, this stage, and the operational system.*
 
-The Business Intelligence (BI) layer is a 3-View Tableau Workbook built on top of the MySQL warehouse: Business Overview, Inventory & Operations, and Customer Intelligence. This document covers the design reasoning behind it, not just what it shows: why a dashboard was needed at all once an operational system already existed, why three views instead of one, how the underlying data model shapes what's reliable to build, and how every figure on it is verified before being trusted.
+The Business Intelligence (BI) layer is a 3-View Tableau Workbook built on top of the MySQL warehouse: Business Overview, Inventory & Operations, and Customer Intelligence. This document covers the design reasoning behind it, not just what it shows: why a dashboard was needed at all once an operational system already existed, why three views instead of one, and how filters and dimensions are used deliberately rather than added for their own sake.
 
 The dashboard design below, every KPI, calculation, chart, and filter, is identical to what the client uses in her own weekly workflow. Only the data differs: these screenshots are from a sanitized, fully synthetic version of the workbook (see the [companion architecture doc](BUSINESS_INTELLIGENCE_ARCHITECTURE.md) for how that dataset was built), so no real customer, supplier, or financial figures appear anywhere in this repo.
 
