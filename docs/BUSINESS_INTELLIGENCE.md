@@ -14,7 +14,7 @@ The dashboard design below, every KPI, calculation, chart, and filter, is identi
 
 Before this engagement began, questions about the business were answered from memory and intuition, not data, because there was no reliable, structured way to answer them otherwise.
 
-The data model built earlier in this engagement solved that in theory: once inventory and sales data lived in a real schema, connected to MySQL, a technical analyst could query it directly, pull historical patterns, spot trends in sales, intake, and repeat-versus-new customer behavior. But a queryable database doesn't help a non-technical business owner. She can't write a query.
+The data model built earlier in this engagement solved that in theory. Once inventory and sales data lived in a real schema connected to MySQL, a technical analyst could query it directly: historical patterns, sales and intake trends, repeat-versus-new customer behavior, all answerable in seconds. But a queryable database doesn't help a non-technical business owner who can't write a query.
 
 Even before that, a staging schema, a spreadsheet with explicit directives on how to enter each field, had already been handed to the client so an analyst could transfer her input into the master sheet. It wasn't enough. There weren't enough rules or parameters in place to actually catch mathematical and input errors at the point of entry, so mistakes still made it through, and catching them required a second set of eyes who understood the business well enough to recognize when a number looked wrong. That was its own bottleneck: errors had to be sent back to the client to fix, and the time spent auditing her entries was time not spent building the tools the business actually needed to operate at scale.
 
