@@ -12,7 +12,7 @@ The dashboard design below, every KPI, calculation, chart, and filter, is identi
 
 ## 1. Why This Exists
 
-Before any of this, questions about the business got answered off the top of the owner's head, because there was no reliable, structured way to answer them otherwise.
+Before this engagement began, questions about the business were answered from memory and intuition, not data, because there was no reliable, structured way to answer them otherwise.
 
 The data model built earlier in this engagement solved that in theory: once inventory and sales data lived in a real schema, connected to MySQL, a technical analyst could query it directly, pull historical patterns, spot trends in sales, intake, and repeat-versus-new customer behavior. But a queryable database doesn't help a non-technical business owner. She can't write a query.
 
