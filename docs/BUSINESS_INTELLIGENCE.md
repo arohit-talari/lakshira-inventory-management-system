@@ -36,7 +36,7 @@ A single combined view would have forced incompatible granularities onto the sam
 
 ## 3. Filters and Dimensions as a Design Principle
 
-The report generator's fixed periods meant the client could never see how the data actually responded as she got more or less granular; every view was locked to whatever period she requested. The dashboard is built around the opposite idea: put the granularity control in her hands, and let her explore at her own pace instead of waiting for a scheduled report.
+The report generator's fixed periods meant the client could never see how the data responded as she got more or less granular; every report was locked to whatever period was requested. The dashboard is built around the opposite idea: empower the user by placing the granularity control in their hands, and let them explore at their own pace instead of waiting for a scheduled report. That matters even more given how many fronts the client juggles day to day: something she notices in her own numbers might surface a pattern that an analyst, without that same ground-level visibility, could easily miss.
 
 This isn't interactivity for its own sake. A concrete example: Revenue by Region on Customer Intelligence isn't just a curiosity chart. As the business takes on more international customers and continues running in-person pop-ups and exhibitions, seeing which regions and countries are actually generating revenue directly informs where the owner takes the business physically next. The filter isn't a nice-to-have; it's a planning tool.
 
