@@ -20,7 +20,7 @@ No KPI on this dashboard was trusted because Tableau displayed it. Every figure 
 - A filter setting that had silently inherited a "top 5 customers" scope from a different worksheet it had been duplicated from, quietly narrowing an unrelated chart down to a handful of customers instead of the full base.
 - A field read in as text rather than a number after a data source reconnect, which changed a numeric comparison into an alphabetical one and produced results that looked plausible at a glance but were structurally wrong.
 
-The discipline is the same one applied throughout the rest of this engagement: verify against the source of truth directly, don't assume a tool's output is correct just because nothing visibly broke.
+The discipline is the same one applied throughout the rest of this engagement: verify against the source of truth directly, irrespective of whether a tool's output looks correct or nothing visibly broke.
 
 ## 3. The Sanitized Demo and Synthetic-Data Methodology
 
