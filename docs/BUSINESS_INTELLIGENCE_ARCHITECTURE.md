@@ -6,7 +6,7 @@ This document describes how the Business Intelligence layer is built and why: th
 
 ## 1. Data Model and Source Structure
 
-The Tableau data source is built on Relationships, not Joins, connecting the inventory, transaction, and customer tables from the MySQL warehouse.
+The Tableau data source is built on Relationships, not Joins, connecting the inventory and transaction tables exported from the MySQL warehouse; customer details are already flattened into the transaction table itself, not a separate connection.
 
 The distinction matters more than it sounds. A join permanently merges two tables into one fixed shape at the moment it's defined; every worksheet built afterward queries that same merged table regardless of what it actually needs, and if the tables don't share a clean one-to-one relationship, that fixed merge can silently duplicate rows or drop them entirely, with no error to flag it. A relationship keeps the tables logically separate and lets Tableau generate the appropriate join fresh, at query time, based on exactly which fields a given worksheet is actually using, correctly matched to that worksheet's own granularity.
 
