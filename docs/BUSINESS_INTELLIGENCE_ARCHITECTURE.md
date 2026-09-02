@@ -16,9 +16,9 @@ That flexibility comes with its own real pitfall, one worth naming directly rath
 
 No KPI on this dashboard was trusted because Tableau displayed it. Every figure was independently recomputed against the underlying data, verified directly against the same source tables, before being considered correct, and that process caught real, non-obvious bugs that a visual read of the dashboard alone would have missed:
 
-- A cached extract that continued to display outdated figures after the underlying data source had already been refreshed, until a full reconnect was forced.
-- A filter setting that had silently inherited a "top 5 customers" scope from a different worksheet it had been duplicated from, quietly narrowing an unrelated chart down to a handful of customers instead of the full base.
-- A field read in as text rather than a number after a data source reconnect, which changed a numeric comparison into an alphabetical one and produced results that looked plausible at a glance but were structurally wrong.
+- A cached extract that kept showing outdated figures after the data source refreshed, fixed only by forcing a full reconnect.
+- A filter that had silently inherited a "top 5 customers" scope from the worksheet it was duplicated from, narrowing an unrelated chart to a handful of customers instead of the full base.
+- A field read in as text instead of a number after a reconnect, turning a numeric comparison into an alphabetical one and producing results that looked plausible but were structurally wrong.
 
 The discipline is the same one applied throughout the rest of this engagement: verify against the source of truth directly, irrespective of whether a tool's output looks correct or nothing visibly broke.
 
