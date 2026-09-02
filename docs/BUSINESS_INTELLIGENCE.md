@@ -24,7 +24,7 @@ The dashboard exists specifically to close that timing gap: built for a weekly o
 
 The first instinct was a single view. But that idea didn't hold up against the most important lesson learned delivering Business Intelligence work: a dashboard crowded with every chart type available, filter-heavy, and missing a focused color palette to direct attention to what actually matters isn't more informative, it's messier. A good dashboard is simple, scoped tightly to what the business and the client actually need, and interactive enough that even the least technical user can find their way around it without exhaustive onboarding.
 
-Scoping down from "everything" to three views followed the three distinct questions the business actually needed answered, not an arbitrary split:
+The three views map directly onto three distinct questions the business needed answered, not an arbitrary split:
 
 | View | Question it answers |
 |---|---|
