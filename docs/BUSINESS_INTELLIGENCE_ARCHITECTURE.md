@@ -34,6 +34,14 @@ Building a synthetic dataset that reads as genuine, rather than obviously genera
 
 The synthetic dataset was reviewed the same way the real one was, cross-checked against expectations, examined for the kinds of statistical tells (a metronomic sawtooth pattern in revenue, catastrophic outlier months, uniform color tiers with no real spread) that would read as generated rather than observed, and corrected wherever they showed up.
 
+## 4. Calculation Architecture
+
+Not every number on this dashboard reduces to a SUM or COUNT. Three calculations below required real engineering, chosen because each represents a distinct Tableau calculation model rather than a variation on the same technique:
+
+- **Sales Consistency (Swing)** is a five-field chain, not a single formula: each period's max and min monthly units, each period's own average, a swing normalized against that period's own average (so a business that's simply grown larger between periods isn't penalized with an inflated swing purely from scale), and a final comparison between the current and prior period's normalized swing.
+- **Repeat Customers %** is a nested FIXED Level of Detail (LOD) expression: `{FIXED : COUNTD(repeat customers)} / {FIXED : COUNTD(all customers)}`, where "repeat" is itself a separate FIXED expression flagging any customer with more than one transaction. Both levels compute at the customer level regardless of whatever else is in the view, the exact property §1 calls out: a KPI reading "38% repeat" has to mean the same 38% no matter what a viewer has filtered elsewhere on the page. Without FIXED, the same formula would silently recompute at whatever granularity the current view happened to be using.
+- **Supplier vs. Overall Sell-Through Gap**, shown on the Supplier Scorecard, compares each supplier's own sell-through rate against the business's overall rate, in percentage points. The "overall" side pools raw units sold and units acquired across every supplier before dividing, rather than averaging each supplier's already-computed rate, so a supplier's influence on that baseline scales with how many units they've actually brought in. Pooled this way, the calculation is mathematically identical to the business's company-wide sell-through rate; it's just computed from inside a view still broken out by supplier, so each row can be measured against it directly.
+
 ---
 
 *Note: real customer, supplier, and financial data are not included anywhere in this repo. Specific business findings and figures from the engagement are documented in a private report for the client instead, standard confidentiality practice for an operating business, not a reflection on the work or its results.*
