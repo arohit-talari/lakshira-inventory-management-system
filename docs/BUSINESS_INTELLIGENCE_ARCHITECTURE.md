@@ -24,7 +24,7 @@ The discipline is the same one applied throughout the rest of this engagement: v
 
 ## 3. The Sanitized Demo and Synthetic-Data Methodology
 
-Real customer, supplier, and financial data are not included anywhere in this repository. A separate, fully synthetic dataset, generated with the same column structure and business logic as the real system, powers a sanitized copy of this workbook for public demonstration, preserving how the dashboard actually behaves without exposing a single real figure.
+Real customer, supplier, and financial data are not included anywhere in this repository. A separate, fully synthetic dataset, matching the real system's column structure and business logic, powers a sanitized copy of this workbook for public demonstration, preserving how the dashboard behaves without exposing a single real figure.
 
 Building a synthetic dataset that reads as genuine, rather than obviously generated, took real methodological care, not just randomized numbers inside a plausible range:
 
