@@ -14,7 +14,7 @@ That flexibility comes with its own real pitfall, one worth naming directly rath
 
 ## 2. Validation Methodology
 
-No KPI on this dashboard was trusted because Tableau displayed it. Every figure was independently recomputed against the underlying data, using Python scripts run directly against the same source tables, before being considered correct, and that process caught real, non-obvious bugs that a visual read of the dashboard alone would have missed:
+No KPI on this dashboard was trusted because Tableau displayed it. Every figure was independently recomputed against the underlying data, verified directly against the same source tables, before being considered correct, and that process caught real, non-obvious bugs that a visual read of the dashboard alone would have missed:
 
 - A cached extract that continued to display outdated figures after the underlying data source had already been refreshed, until a full reconnect was forced.
 - A filter setting that had silently inherited a "top 5 customers" scope from a different worksheet it had been duplicated from, quietly narrowing an unrelated chart down to a handful of customers instead of the full base.
