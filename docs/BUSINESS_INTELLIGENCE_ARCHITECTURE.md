@@ -1,6 +1,6 @@
 # Business Intelligence Architecture
 
-This document describes how the Business Intelligence layer is built and why: the data source structure, the validation methodology behind every figure on it, and the synthetic-data approach behind the sanitized public demo. For the design reasoning behind what's actually on the dashboard, why these views, why these KPIs, see [Business Intelligence](BUSINESS_INTELLIGENCE.md); for the full engagement lifecycle this stage is one part of, see the main [README](../README.md).
+This document describes how the Business Intelligence layer is built and why: the data source structure, the validation methodology behind every figure on it, the synthetic-data approach behind the sanitized public demo, and the calculation architecture behind its most complex metrics. For the design reasoning behind what's actually on the dashboard, why these views, why these KPIs, see [Business Intelligence](BUSINESS_INTELLIGENCE.md); for the full engagement lifecycle this stage is one part of, see the main [README](../README.md).
 
 ---
 
