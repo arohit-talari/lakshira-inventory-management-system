@@ -32,7 +32,7 @@ The three views map directly onto three distinct questions the business needed a
 | **Inventory & Operations** | What's hampering the business, and where is capital tied up or at risk? |
 | **Customer Intelligence** | Who are the customers keeping this business running? |
 
-A single combined view would have forced incompatible granularities onto the same page, lifetime health metrics next to individual aging units next to per-customer detail, and made it hard to protect the one thing that matters most on a KPI: that a lifetime number stays lifetime truth regardless of what a viewer happens to be filtering elsewhere on the page (more on that in §4). Three focused views, each free to define its own filters and its own level of detail, avoided that collision entirely.
+A single combined view would have forced incompatible granularities onto the same page, lifetime health metrics next to individual aging units next to per-customer detail, making it difficult to protect the one thing that matters most on a KPI: a lifetime number that reflects lifetime truth regardless of whatever a viewer happens to be filtering elsewhere on the page (more on that in §4). Answering a different question per view, each complementary to the others, let every view freely define its own filters and level of detail, avoiding that collision entirely.
 
 ## 3. Filters and Dimensions as a Design Principle
 
