@@ -48,7 +48,7 @@ A nested FIXED Level of Detail (LOD) expression: `{FIXED : COUNTD(repeat custome
 
 ### Supplier vs. Overall Sell-Through Gap
 
-Shown on the Supplier Scorecard, this calculation compares each supplier's own sell-through rate against the business's overall rate, in percentage points. The "overall" side pools raw units sold and units acquired across every supplier before dividing, rather than averaging each supplier's already-computed rate, so a supplier's influence on that baseline scales with how many units they've actually brought in. Pooled this way, the calculation is mathematically identical to the business's company-wide sell-through rate; it's just computed from inside a view still broken out by supplier, so each row can be measured against it directly.
+Shown on the Supplier Scorecard, this compares each supplier's own sell-through rate to the business's overall rate, in percentage points. But "overall" isn't a simple average of each supplier's rate. It's the sum of units sold across every supplier, divided by the sum of units acquired across every supplier. That means a supplier's weight in the overall number scales with how many units they've actually brought in, a large supplier moves it more than a small one does. This pooled number ends up being the same as the business's company-wide sell-through rate; it's just calculated from inside a table still broken out by supplier, so each row can be measured against it directly.
 
 ---
 
