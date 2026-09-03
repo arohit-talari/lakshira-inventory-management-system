@@ -44,7 +44,7 @@ A five-field chain, comparing two 6-month periods (current vs. prior) to assess 
 
 ### Repeat Customers %
 
-A nested FIXED Level of Detail (LOD) expression: `{FIXED : COUNTD(repeat customers)} / {FIXED : COUNTD(all customers)}`, where "repeat" is itself a separate FIXED expression, `{FIXED [customer_name] : COUNTD(transaction_id)} > 1`, flagging any customer with more than one transaction. The repeat flag is calculated customer by customer. The two counts around it are calculated across the whole business at once, not per customer. Locking every part of this with FIXED keeps the final percentage constant, say, "38% repeat" always stays 38%, irrespective of what's filtered elsewhere on the page. Without FIXED, that same formula could quietly show a different number depending on what else happens to be in the view.
+A nested FIXED Level of Detail (LOD) expression: `{FIXED : COUNTD(repeat customers)} / {FIXED : COUNTD(all customers)}`, where "repeat" is itself a separate FIXED expression, `{FIXED [customer_name] : COUNTD(transaction_id)} > 1`, flagging any customer with more than one transaction. The repeat flag is calculated customer by customer. The two counts around it are calculated across the whole business at once, not per customer. Locking every part of this with FIXED keeps the final percentage constant: "38% repeat" always stays 38%, irrespective of what's filtered elsewhere on the page. Without FIXED, that same formula could quietly show a different number depending on what else happens to be in the view.
 
 ### Supplier vs. Overall Sell-Through Gap
 
