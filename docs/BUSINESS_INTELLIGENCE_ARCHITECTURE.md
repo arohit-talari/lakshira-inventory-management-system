@@ -26,13 +26,13 @@ The discipline is the same one applied throughout the rest of this engagement: v
 
 Real customer, supplier, and financial data are not included anywhere in this repository. A separate, fully synthetic dataset, matching the real system's column structure and business logic, powers a sanitized copy of this workbook for public demonstration, preserving how the dashboard behaves without exposing a single real figure.
 
-Building a synthetic dataset that reads as genuine, rather than obviously generated, took real methodological care, not just randomized numbers inside a plausible range:
+The synthetic dataset started from Lakshira's real numbers as a baseline, rather than being generated from scratch. Building it out from there still took real care:
 
-- **Revenue and profit vary organically month to month**, not clipped flat against a ceiling, using a smoothed random walk with occasional shock months rather than independent per-month noise, which produces the kind of uneven, clustered volatility real sales actually show instead of an artificially even oscillation.
-- **Customer revenue concentration, supplier performance, and collection sell-through rates are deliberately tuned**, not left to fall out of pure randomness, so the synthetic business shows the same kind of believable structure a real one does: a few standout customers and suppliers, a real spread from strong to weak performers, not a flat, suspiciously uniform distribution across the board.
-- **Pricing escalates over time** rather than being applied at one flat tier across the whole history, since the dataset is meant to represent a business just arriving at a more premium market position, not one that's already been there for years.
+- **Revenue and profit carry real variance from month to month**, not capped at a flat ceiling, each month building somewhat on the one before rather than jumping around independently.
+- **Customer spending, supplier performance, and collection sell-through rates are deliberately shaped**, not left purely random, with some suppliers and a handful of customers separating themselves from the pack with respect to sell-through and spending while others trail behind.
+- **Prices climb over time** instead of staying flat across the whole history, since the dataset represents a business just stepping into a more premium position, not one that's already been there for years.
 
-The synthetic dataset was reviewed the same way the real one was, cross-checked against expectations, examined for the kinds of statistical tells (a metronomic sawtooth pattern in revenue, catastrophic outlier months, uniform color tiers with no real spread) that would read as generated rather than observed, and corrected wherever they showed up.
+The synthetic dataset was reviewed the same way the real one was: checked against expectations and examined for anything that would give it away as artificial, a repeating up-and-down pattern in revenue, an extreme one-off month, or categories that all look identically spread out, and corrected wherever that showed up.
 
 ## 4. Calculation Architecture
 
