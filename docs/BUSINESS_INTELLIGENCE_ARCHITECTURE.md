@@ -32,7 +32,7 @@ The synthetic dataset started from Lakshira's real numbers as a baseline, rather
 - **Customer spending, supplier performance, and collection sell-through rates are deliberately shaped**, not left purely random, with some suppliers and a handful of customers separating themselves from the pack with respect to sell-through and spending while others trail behind.
 - **Prices climb over time** instead of staying flat across the whole history, since the dataset represents a business just stepping into a more premium position, not one that's already been there for years.
 
-The synthetic dataset was reviewed the same way the real one was: checked against expectations and examined for anything that would give it away as artificial, a repeating up-and-down pattern in revenue, an extreme one-off month, or categories that all look identically spread out, and corrected wherever that showed up.
+The synthetic dataset was then reviewed the same way the real one was, checked against expectations rather than assumed correct.
 
 ## 4. Calculation Architecture
 
