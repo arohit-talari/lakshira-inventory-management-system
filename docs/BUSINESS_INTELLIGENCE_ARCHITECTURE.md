@@ -40,7 +40,7 @@ Not every number on this dashboard reduces to a SUM or COUNT. Three calculations
 
 ### Sales Consistency (Swing)
 
-A five-field chain, not a single formula: each period's max and min monthly units, each period's own average, a swing normalized against that period's own average (so a business that's simply grown larger between periods isn't penalized with an inflated swing purely from scale), and a final comparison between the current and prior period's normalized swing.
+A five-field chain, comparing two 6-month periods (current vs. prior) to assess month-to-month sales variation within each. It doesn't work as a single formula, but as a five-step procedure: (1) each period's highest monthly units sold, (2) each period's lowest monthly units sold, (3) each period's own average across the six months, (4) a swing normalized against that period's own average (so a business that's simply grown larger between periods isn't penalized with an inflated swing purely from scale), and (5) a final comparison between the current and prior period's normalized swing.
 
 ### Repeat Customers %
 
