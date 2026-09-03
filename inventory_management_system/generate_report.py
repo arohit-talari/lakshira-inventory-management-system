@@ -1401,11 +1401,11 @@ def _sec_channels(m):
         totals=["Total", str(m["units"]), _usd(t_rev), "100.0%"]
     )
 
-# ── Section 5: Accounts Receivable (AR) ────────────────────────────────────────
+# ── Section 5: Outstanding Balance ────────────────────────────────────────────
 def _sec_outstanding(m):
-    header = _sec("Accounts Receivable (AR)") + [
+    header = _sec("Outstanding Balance") + [
         Paragraph(
-            "<b>Accounts Receivable (AR)</b> is money owed to the business for units "
+            "<b>Outstanding Balance</b> is money owed to the business for units "
             "already sold but not yet fully paid for.",
             ST["note"]
         ),
