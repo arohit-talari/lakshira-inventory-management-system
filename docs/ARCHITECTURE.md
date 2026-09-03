@@ -71,7 +71,7 @@ Every write operation follows the same shape: look up, validate status/eligibili
 
 ## 7. Concurrency Safety
 
-More than one person can touch the same record at once: two staff members, or the same person across two sessions, could act on the same inventory unit at the same time. Without this safeguard, a system would let the second write silently overwrite the first, losing a price change, a payment, or a status update with no way to know it happened, so this was scoped as a hard requirement, not an edge case to accept. Every write-path operation re-reads the target row immediately before committing and compares it against the state it started from; if anything relevant changed in the meantime (a status flip, a cost edit, a payment recorded by someone else), the write is rejected with a clear explanation instead of silently overwriting it. Verified directly: two sessions editing the same unit at once, with the second write correctly rejected once the first one's change had landed.
+More than one person can touch the same record at once: two staff members, or the same person across two sessions, could act on the same inventory unit at the same time. Without a safeguard, a system would let the second write silently overwrite the first, losing a price change, a payment, or a status update with no way to know it happened, so this was scoped as a hard requirement, not an edge case to accept. Claude Code implemented that requirement as a re-read-and-compare check: every write-path operation re-reads the target row immediately before committing and compares it against the state it started from, and if anything relevant changed in the meantime (a status flip, a cost edit, a payment recorded by someone else), the write is rejected with a clear explanation instead of silently overwriting it. Verified directly: two sessions editing the same unit at once, with the second write correctly rejected once the first one's change had landed.
 
 ## 8. Test/Live Mode
 
@@ -84,4 +84,4 @@ A single `MODE` variable at the top of `inventory.py` switches the entire system
 - Lets a user type a SKU or category code by hand
 - Overwrites the append-only note columns; every note action appends, never replaces
 - Assigns a category code that's already mapped to a different weave type
-- Sends customer Personally Identifiable Information (PII) through anything other than the sheet API itself: no data lake, no analytics Software Development Kit (SDK), no third-party storage beyond the sheet and the business's own MySQL warehouse
+- Sends customer Personally Identifiable Information (PII) through anything other than the sheet API itself: no third-party storage beyond the sheet and the business's own MySQL warehouse
