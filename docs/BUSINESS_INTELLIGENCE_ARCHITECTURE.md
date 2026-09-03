@@ -44,7 +44,7 @@ A five-field chain, comparing two 6-month periods (current vs. prior) to assess 
 
 ### Repeat Customers %
 
-A nested FIXED Level of Detail (LOD) expression: `{FIXED : COUNTD(repeat customers)} / {FIXED : COUNTD(all customers)}`, where "repeat" is itself a separate FIXED expression flagging any customer with more than one transaction. Both levels compute at the customer level regardless of whatever else is in the view, the exact property §1 calls out: a KPI reading "38% repeat" has to mean the same 38% no matter what a viewer has filtered elsewhere on the page. Without FIXED, the same formula would silently recompute at whatever granularity the current view happened to be using.
+A nested FIXED Level of Detail (LOD) expression: `{FIXED : COUNTD(repeat customers)} / {FIXED : COUNTD(all customers)}`, where "repeat" is itself a separate FIXED expression, `{FIXED [customer_name] : COUNTD(transaction_id)} > 1`, flagging any customer with more than one transaction. The inner expression fixes at the customer level, one true-or-false flag per customer; the two outer expressions fix at the total level, ignoring every dimension in the view to produce a single count each. Because every layer is FIXED, the resulting ratio never moves regardless of what's filtered elsewhere on the page, a KPI reading "38% repeat" always means the same 38%. Without FIXED at each layer, the same formula would silently recompute at whatever granularity the current view happened to be using.
 
 ### Supplier vs. Overall Sell-Through Gap
 
