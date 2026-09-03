@@ -6,7 +6,7 @@ The stakeholder's actual answers are not included here. They contain real financ
 
 ## How this was run
 
-The session ran as a free-flowing conversation, not an interrogation: starting with open, low-stakes questions to get the stakeholder talking naturally about her business, then following the threads she opened rather than sticking rigidly to a script. The most valuable answers came from going off-script, rarely from mechanically working down the list.
+The session ran as a free-flowing conversation, not an interrogation: starting with open, low-stakes questions to get the stakeholder talking naturally about the business, then following the threads that came up rather than sticking rigidly to a script. The most valuable answers came from going off-script, rarely from mechanically working down the list.
 
 ---
 
@@ -34,7 +34,7 @@ The session ran as a free-flowing conversation, not an interrogation: starting w
 15. Have you ever lost track of an order, a payment, or a customer request?
 
 ## Section 3: Customers
-*Understanding who she's selling to*
+*Understanding who the business sells to*
 
 16. Who is your typical customer? How would you describe her?
 17. Do you have customers who buy repeatedly? How often do they come back?
@@ -45,7 +45,7 @@ The session ran as a free-flowing conversation, not an interrogation: starting w
 22. Do your local customers behave differently from customers who order from out of state or internationally?
 
 ## Section 4: Suppliers
-*Understanding her sourcing relationships*
+*Understanding the business's sourcing relationships*
 
 23. How many suppliers do you currently work with?
 24. Are all suppliers equal, or do you trust some more than others for quality or reliability?
@@ -65,7 +65,7 @@ The session ran as a free-flowing conversation, not an interrogation: starting w
 34. Are there months that are significantly better or worse than others for sales?
 
 ## Section 6: Goals and Vision
-*Where she wants to go*
+*Where the business wants to go*
 
 35. What does success look like for this business in two years? In five?
 36. Is there a revenue number or a customer count that would feel like a real milestone to you?
