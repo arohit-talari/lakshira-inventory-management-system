@@ -4,7 +4,7 @@
 
 <h1 align="center">Lakshira Handwoven Weaves: Data and Systems Build</h1>
 
-An end-to-end data and systems engagement for a real small business: a handloom textile brand with no data infrastructure, rapid organic growth it couldn't measure, and an ambition to reach luxury-boutique scale. This repo documents the full build, stage by stage: from the discovery work that scoped the problem through the operational system now running the business day to day.
+An end-to-end data and systems engagement for a real small business: a handloom textile brand with no data infrastructure, rapid organic growth it couldn't measure, and an ambition to reach luxury-boutique scale. This repository documents the full build, stage by stage: from the discovery work that scoped the problem through the operational system now running the business day to day.
 
 My approach stays the same regardless of stage: understand the business and the question before touching a tool. Discovery came first specifically to surface the pressure points already hampering the business, and every stage since has been built on what the one before it established, in order, not in parallel. But it isn't a one-shot pipeline. Day-to-day use of **Business Intelligence** and **Operational System** continues to surface new data needs, which loop back into **Data Foundation** and flow forward again.
 
@@ -64,7 +64,7 @@ A unified master sheet centralized the data needed to assess the business's heal
 | **Pipeline** | Extract (Google Sheets API) → Transform (pandas) → Load (MySQL on AWS RDS) |
 | **Schema** | 5 normalized tables: category, customer, inventory, supplier, transaction |
 | **Scale** | 1,495 inventory records · 494 transactions · 61 customers · 18 suppliers |
-| **Status** | Built and running; ETL codebase not yet published as a separate repo |
+| **Status** | Built and running; ETL codebase not yet published as a separate repository |
 | **Impact** | Exploratory Data Analysis, e.g. supplier profitability or cash tied up in aging stock, that once took hours of manual spreadsheet review is now done in seconds |
 
 ```mermaid
@@ -130,4 +130,4 @@ The data and analytics foundation still left a gap: the owner, already juggling 
 
 ---
 
-*Note: real customer, supplier, and financial data are not included anywhere in this repo. Specific business findings and figures from the engagement are documented in a private report for the client instead, standard confidentiality practice for an operating business, not a reflection on the work or its results. Figures above are either aggregate counts (record/table counts) or reference values seeded with placeholder data of the same shape as production.*
+*Note: real customer, supplier, and financial data are not included anywhere in this repository. Specific business findings and figures from the engagement are documented in a private report for the client instead, standard confidentiality practice for an operating business, not a reflection on the work or its results. Figures above are either aggregate counts (record/table counts) or reference values seeded with placeholder data of the same shape as production.*

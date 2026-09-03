@@ -4,7 +4,7 @@
 
 The Inventory Management System (IMS) is a terminal-based Command-Line Interface (CLI) for inventory, sales, and business intelligence at Lakshira Handwoven Weaves, a small, rapidly growing handloom textile business, replacing repetitive manual spreadsheet input and editing with a guided, validated interface built for a non-technical user.
 
-Designed and directed by **Arohit Talari**: every design decision, bug fix, and test in this repo was specified and validated across a multi-week working session, with **Claude Code** as the execution layer translating that direction into working code, not a one-shot generation. The commit history and the testing section below reflect that iterative process directly.
+Designed and directed by **Arohit Talari**: every design decision, bug fix, and test in this repository was specified and validated across a multi-week working session, with **Claude Code** as the execution layer translating that direction into working code, not a one-shot generation. The commit history and the testing section below reflect that iterative process directly.
 
 ## Why this exists
 
@@ -82,7 +82,7 @@ Every fix started with direct, repeated use of the system, running it against re
 
 ## Running it
 
-All commands run from the repo root.
+All commands run from the repository root.
 
 ```bash
 python3 -m venv .venv
@@ -123,4 +123,4 @@ docs/
 
 ---
 
-*Note: real customer, supplier, and financial data are not included anywhere in this repo. The system's only data store is Google Sheets (and, downstream, the business's own MySQL warehouse), never this codebase. Specific business findings and figures from the engagement are documented in a private report for the client instead, standard confidentiality practice for an operating business, not a reflection on the work or its results. A few reference values (e.g. the supplier list) are seeded with placeholder data of the same shape as production for demonstration purposes.*
+*Note: real customer, supplier, and financial data are not included anywhere in this repository. The system's only data store is Google Sheets (and, downstream, the business's own MySQL warehouse), never this codebase. Specific business findings and figures from the engagement are documented in a private report for the client instead, standard confidentiality practice for an operating business, not a reflection on the work or its results. A few reference values (e.g. the supplier list) are seeded with placeholder data of the same shape as production for demonstration purposes.*
