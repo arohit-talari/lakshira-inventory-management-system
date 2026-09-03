@@ -46,7 +46,7 @@ Before any recommendation was made, a structured stakeholder discovery and requi
 
 <h3 align="left">2. Data Foundation</h3>
 
-Inventory tracking was dispersed across 12 separate spreadsheets with no single source of truth, no standardized categories, weave types, or suppliers, and no consistent pricing method. The first build stage replaced that entirely with a unified master sheet: standardized category and supplier reference tables, data validation across every controlled field, conditional formatting that flags unit- and business-level health metrics, and formula-driven derived columns. Where there was once a scattered manual tracking system for the business's lifetime units, there now was a real data model, the single source of truth for any question the business had.
+Inventory tracking was dispersed across 12 separate spreadsheets with no single source of truth, no standardized categories, weave types, or suppliers, and no consistent pricing method. The first build stage replaced that entirely with a unified master sheet: standardized category and supplier reference tables, validated pick-lists for sales channel and status, conditional formatting that flags unit- and business-level health metrics, and formula-driven derived columns. Where there was once a scattered manual tracking system for the business's lifetime units, there now was a real data model, the single source of truth for any question the business had.
 
 | | |
 |---|---|
