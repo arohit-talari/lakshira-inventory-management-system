@@ -1271,7 +1271,6 @@ def _sec_revenue(m):
         ("Gross Margin",     _pct(mg)),
         ("Units Sold",       str(m["units"])),
         ("Avg Order Value",  _usd_k(m["avg_price"])),
-        ("Unsold Inventory", _usd_k(m["unsold_val"])),
     ])])]
     story.append(Spacer(1, 10))
 
@@ -1800,7 +1799,8 @@ def _sec_snapshot(m, gen_date_str):
     heading = _sec("Inventory Snapshot") + [
         Paragraph(
             f"A real-time census of every unit by status as of {gen_date_str} — the "
-            f"baseline for tracking unsold inventory against what's already sold.",
+            f"baseline for tracking unsold inventory ({_usd(m['unsold_val'])} in capital "
+            f"currently tied up) against what's already sold.",
             ST["note"]
         ),
         Spacer(1, 4),
@@ -1835,12 +1835,17 @@ def _sec_aging(m):
 
     dead = buckets["180+"]
     if dead:
+        # BURNT_ORANGE marks this as the report's most severe tier, distinct
+        # from the routine ROSE used for outstanding balances elsewhere --
+        # 180+ days is the same "more painful inflection point" the dashboard
+        # weights toward in Inventory Age Distribution, so it earns a color
+        # one step past the standard attention-needed flag.
         callout_block = [_callout(
             f"{len(dead)} unit{'s' if len(dead)!=1 else ''} "
             f"{'have' if len(dead)!=1 else 'has'} been in inventory for over 180 days. "
             f"Consider restaging across marketing platforms and developing stronger unit "
             f"narratives before any pricing adjustment.",
-            bg=ROSE
+            bg=BURNT_ORANGE
         ), Spacer(1, 8)]
 
         today = date.today()
