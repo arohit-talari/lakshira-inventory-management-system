@@ -19,6 +19,7 @@ No KPI on this dashboard was trusted because Tableau displayed it. Every figure 
 - A cached extract that kept showing outdated figures after the data source refreshed, fixed only by forcing a full reconnect.
 - A filter that had silently inherited a "top 5 customers" scope from the worksheet it was duplicated from, narrowing an unrelated chart to a handful of customers instead of the full base.
 - A field read in as text instead of a number after a reconnect, turning a numeric comparison into an alphabetical one and producing results that looked plausible but were structurally wrong.
+- A repeat-customer flag built on raw transaction count, which misread a single bulk purchase (several sarees bought in one sitting) as several separate return visits, overstating genuine repeat behavior. Fixed by grouping units into shared purchase occasions first, then counting occasions rather than transaction rows.
 
 The discipline is the same one applied throughout the rest of this engagement: verify against the source of truth directly, irrespective of whether a tool's output looks correct or nothing visibly broke.
 
@@ -44,7 +45,7 @@ A five-field chain, comparing two 6-month periods (current vs. prior) to assess 
 
 ### Repeat Customers %
 
-A nested FIXED Level of Detail (LOD) expression: `{FIXED : COUNTD(repeat customers)} / {FIXED : COUNTD(all customers)}`, where "repeat" is itself a separate FIXED expression, `{FIXED [customer_name] : COUNTD(transaction_id)} > 1`, flagging any customer with more than one transaction. The repeat flag is calculated customer by customer. The two counts around it are calculated across the whole business at once, not per customer. Locking every part of this with FIXED keeps the final percentage constant: "38% repeat" always stays 38%, irrespective of what's filtered elsewhere on the page. Without FIXED, that same formula could quietly show a different number depending on what else happens to be in the view.
+A nested FIXED Level of Detail (LOD) expression: `{FIXED : COUNTD(repeat customers)} / {FIXED : COUNTD(all customers)}`, where "repeat" is itself a separate FIXED expression, `{FIXED [customer_name] : COUNTD(transaction_group_id)} > 1`, flagging any customer who has purchased on more than one distinct occasion, not more than one transaction row. That distinction is deliberate, not cosmetic: a customer buying five sarees in a single sitting is one occasion, not five, and counting raw transaction rows instead would flag every bulk buyer as "repeat" regardless of whether they ever actually returned. `transaction_group_id` links every unit bought by the same customer, on the same day, through the same sales channel, into one shared value, so the flag reflects genuine return visits rather than basket size. The repeat flag is calculated customer by customer. The two counts around it are calculated across the whole business at once, not per customer. Locking every part of this with FIXED keeps the final percentage constant regardless of what's filtered elsewhere on the page; without it, that same formula could quietly show a different number depending on what else happens to be in the view.
 
 ### Supplier vs. Overall Sell-Through Gap
 
