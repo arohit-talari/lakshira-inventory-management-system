@@ -51,3 +51,14 @@ EMAIL_RECIPIENTS = [addr.strip() for addr in os.environ.get("EMAIL_RECIPIENTS", 
 
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT   = 587
+
+# ── MySQL warehouse ────────────────────────────────────────────────────────────
+# Used only for basket/occasion-aware metrics (e.g. Lifetime Loyalty) --
+# transaction_group_id lives in this warehouse, not the Google Sheet.
+DB_CONFIG = {
+    "host":     os.environ["DB_HOST"],
+    "port":     int(os.environ["DB_PORT"]),
+    "user":     os.environ["DB_USER"],
+    "password": os.environ["DB_PASSWORD"],
+    "database": os.environ["DB_NAME"],
+}
