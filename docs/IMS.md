@@ -46,8 +46,8 @@ Every write operation follows the same guided shape: look up → validate status
 
 Before this system could go live and be trusted with real customer and financial data, it had to be rigorously tested to ensure it solved the business's core problem. Architecting and designing all the operations and business logic the system would depend on wasn't the bar. Validation was run through a structured UAT (User Acceptance Testing) process, which surfaced 355 defects against business workflows and stakeholder-observed scenarios, each classified by business risk rather than technical severity (23 assessed as Critical), and each traced back to a specific requirement or a specific gap in how the manual process previously worked. That process is what transformed a working script that could theoretically handle the business's workflows into a system the stakeholder could actually depend on for day-to-day operations.
 
-**A two-tier, 205-test automated regression suite locks each resolved defect in place:**
-- **130 tests** validating core business logic (pricing calculations, date/aging rules, report metrics) in isolation
+**A two-tier, 222-test automated regression suite locks each resolved defect in place:**
+- **147 tests** validating core business logic (pricing calculations, date/aging rules, report metrics) in isolation
 - **75 tests** driving the full guided workflow end-to-end against a live test environment, covering all 10 operations: correct-path completion, appropriate rejection of invalid states, validation-error handling, and cancellation paths
 
 That validation effort covered four distinct kinds of ground:
@@ -70,7 +70,7 @@ One specific risk that discipline caught: because more than one person can act o
 The validation effort above was run as a structured DMAIC (Define, Measure, Analyze, Improve, Control) cycle, closing the gap between the manual process and the delivered system:
 
 - **Define**: the manual, hand-edited spreadsheet was the source of the defects being eliminated: no validation, no audit trail, silent data-entry errors, no repeatable reporting process.
-- **Measure**: 355 defects identified and prioritized by business risk (23 Critical), against a 205-test suite establishing a repeatable baseline instead of ad hoc spot-checks.
+- **Measure**: 355 defects identified and prioritized by business risk (23 Critical), against a 222-test suite establishing a repeatable baseline instead of ad hoc spot-checks.
 - **Analyze**: every defect was root-caused against the actual business workflow it broke, never just patched at the symptom. A reporting mismatch, for example, was traced back to specific incomplete source records rather than written off as noise.
 - **Improve**: each defect resolved at its root cause, with the underlying process changed so the same class of issue can't recur. Fixing the immediate instance alone wasn't the goal.
 - **Control**: every fix locked behind a permanent regression test, re-run before any future change, functioning as the control mechanism in place of a physical control chart.
@@ -118,7 +118,7 @@ inventory_management_system/
   scheduler.py             # automated report scheduling (macOS launchd)
   assets/                  # fonts and logo used by generated PDF reports
   .env.example             # template for the .env this system reads at runtime
-tests/                     # 205 tests across both tiers
+tests/                     # 222 tests across both tiers
 docs/
   ARCHITECTURE.md          # data model, SKU logic, currency handling, per-operation detail
   STAKEHOLDER_DISCOVERY.md # the requirements-gathering framework that shaped every decision above

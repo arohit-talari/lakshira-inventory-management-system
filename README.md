@@ -23,7 +23,7 @@ flowchart LR
 |---|---|
 | **`docs/`** | The write-ups and diagrams: how the system works, how its requirements were gathered, and the schema it's built on |
 | **`inventory_management_system/`** | The system itself: its code, the fonts and logo used in generated reports, and a settings template |
-| **`tests/`** | 205 automated checks that confirm the system still works correctly every time something changes |
+| **`tests/`** | 222 automated checks that confirm the system still works correctly every time something changes |
 | **`requirements.txt`** | The list of external tools the system needs installed to run |
 | **`pytest.ini`** | Configuration for running the automated tests |
 | **`.gitignore`** | Tells Git which files, like passwords and credentials, should never be uploaded |
@@ -63,7 +63,7 @@ A unified master sheet centralized the data needed to assess the business's heal
 |---|---|
 | **Pipeline** | Extract (Google Sheets API) → Transform (pandas) → Load (MySQL on AWS RDS) |
 | **Schema** | 5 normalized tables: category, customer, inventory, supplier, transaction |
-| **Scale** | 1,495 inventory records · 494 transactions · 61 customers · 18 suppliers |
+| **Scale** | 1,540 inventory records · 508 transactions · 58 customers · 19 suppliers |
 | **Status** | Built and running; ETL codebase not yet published as a separate repository |
 | **Impact** | Exploratory Data Analysis, e.g. supplier profitability or cash tied up in aging stock, that once took hours of manual spreadsheet review is now done in seconds |
 
@@ -122,7 +122,7 @@ The data and analytics foundation still left a gap: the owner, already juggling 
 | | |
 |---|---|
 | **Operations** | 10, covering the full inventory-to-sale-to-reporting lifecycle |
-| **Quality Assurance** | 355 defects resolved (23 Critical) via structured UAT (User Acceptance Testing), backed by a 205-test automated regression suite |
+| **Quality Assurance** | 355 defects resolved (23 Critical) via structured UAT (User Acceptance Testing), backed by a 222-test automated regression suite |
 | **Built with** | Python, directed through Claude Code |
 | **Impact** | Removed day-to-day dependence on the analyst for pricing and discount decisions, replacing ad hoc requests with self-serve tools grounded in real margin thresholds |
 
