@@ -335,9 +335,9 @@ def append_row(row_data):
     """
     Append a new row to the sheet starting at column A.
     Finds the next empty row by scanning the WHOLE sheet (every column),
-    then writes the full 39-element list via ws.update() with an explicit
-    range so gspread cannot offset the write due to formula content in
-    other columns.
+    then writes the full-width list (derived from COLUMNS, not a hardcoded
+    count) via ws.update() with an explicit range so gspread cannot offset
+    the write due to formula content in other columns.
 
     A row only counts as empty when nothing is in it anywhere -- scanning
     just column A (SKU) would undercount if any row ever has a blank SKU
@@ -353,7 +353,7 @@ def append_row(row_data):
     if sku and find_row_index_by_sku(sku) is not None:
         raise ValueError(f"Refusing to append: SKU {sku} already exists in the sheet.")
     ws = connect_to_sheet()
-    row = [""] * 39
+    row = [""] * max(COLUMNS.values())
     for col_name, value in row_data.items():
         idx = COLUMNS.get(col_name)
         if idx is not None:
@@ -397,8 +397,10 @@ def get_row_by_sheet_index(sheet_row_number):
     """Return a single row as a dict keyed by column name."""
     ws = connect_to_sheet()
     row_values = ws.row_values(sheet_row_number)
-    # Pad to 39 columns in case trailing cells are empty
-    row_values += [""] * (39 - len(row_values))
+    # Pad out to the last tracked column in case trailing cells are empty --
+    # derived from COLUMNS itself (not a hardcoded count) so this can't go
+    # stale again the next time a column is added.
+    row_values += [""] * (max(COLUMNS.values()) - len(row_values))
     result = {}
     for col_name, idx in COLUMNS.items():
         result[col_name] = row_values[idx - 1]
@@ -595,7 +597,7 @@ def _looks_like_phone_query(query):
 def ask_number(prompt, allow_zero=False, allow_negative=False):
     """Return a validated float from user input."""
     while True:
-        raw = input(f"\n{prompt} ").strip()
+        raw = input(f"\n\033[1m{prompt}\033[0m ").strip()
         try:
             value = float(raw)
             if not allow_negative and value < 0:
@@ -631,7 +633,7 @@ def ask_date(prompt, not_future=False, not_before=None, not_after=None,
     """
     while True:
         suffix = " (Type 'back' to cancel)" if allow_back else ""
-        raw = input(f"\n{prompt} (MM-DD-YYYY){suffix}: ").strip()
+        raw = input(f"\n\033[1m{prompt} (MM-DD-YYYY){suffix}:\033[0m ").strip()
         if allow_back and raw.lower() == "back":
             return None
         try:
@@ -656,7 +658,7 @@ def ask_date(prompt, not_future=False, not_before=None, not_after=None,
 def ask_yes_no(prompt):
     """Return True for yes, False for no."""
     while True:
-        raw = input(f"\n{prompt} (yes/no): ").strip().lower()
+        raw = input(f"\n\033[1m{prompt} (yes/no):\033[0m ").strip().lower()
         if raw in ("yes", "y"):
             return True
         if raw in ("no", "n"):
@@ -749,7 +751,7 @@ def _print_boxed(title, sections):
 def ask_text(prompt, required=True, blank_message="This field cannot be left blank. Please enter a value."):
     """Return a non-empty string (or empty string if not required)."""
     while True:
-        raw = " ".join(input(f"\n{prompt} ").split())
+        raw = " ".join(input(f"\n\033[1m{prompt}\033[0m ").split())
         if raw:
             return raw
         if not required:
@@ -760,7 +762,7 @@ def ask_text(prompt, required=True, blank_message="This field cannot be left bla
 def ask_percent(prompt, allow_zero=True):
     """Return a validated float between 0 and 100."""
     while True:
-        raw = input(f"\n{prompt} ").strip()
+        raw = input(f"\n\033[1m{prompt}\033[0m ").strip()
         try:
             value = float(raw)
             if value < 0 or value > 100:
@@ -1297,7 +1299,7 @@ def select_or_add_weave_type():
         # the "Add new" duplicate-detection flow below for where fuzzy
         # matching is the better fit instead).
         while True:
-            query = input(f"\nSearch {garment_choice} weave types (or press Enter to see all): ").strip()
+            query = input(f"\n\033[1mSearch {garment_choice} weave types (or press Enter to see all):\033[0m ").strip()
             if not query:
                 display_names = filtered_names
                 break
