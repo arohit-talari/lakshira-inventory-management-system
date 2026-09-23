@@ -62,3 +62,12 @@ DB_CONFIG = {
     "password": os.environ["DB_PASSWORD"],
     "database": os.environ["DB_NAME"],
 }
+
+# ── Scheduler kill switch ──────────────────────────────────────────────────────
+# scheduler.py (the cron-triggered automated report) checks this before doing
+# anything -- "live" is the only value that activates it. Any other value
+# (including unset) keeps it a complete no-op: no PDF built, no Claude API
+# call, no email sent, just a log line. Flip to "live" in .env to actually
+# start automated report generation + email delivery; no code change or
+# re-deploy needed.
+SCHEDULER_MODE = os.environ.get("SCHEDULER_MODE", "test").strip().lower()
