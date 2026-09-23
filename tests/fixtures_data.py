@@ -21,6 +21,7 @@ for other synthetic test rows (e.g. LAH-TWV100).
 """
 import itertools
 import time
+from datetime import date
 
 import inventory as inv
 from tests.pexpect_helpers import retry_on_quota
@@ -44,6 +45,35 @@ _BLANK_PRICE_MARKER = "[TEST-FIXTURE · BLANK-PRICE] synthetic unit for Tier 2 t
 
 _CATEGORY_CODE = "TWV"
 _WEAVE_TYPE = "TestWeave"
+
+# SKUs written by create_sold_unit(), create_sold_unit_blank_total_cost(),
+# and create_partial_payment_unit() during the running test -- unlike the
+# get_or_create_*() fixtures above, each call to these makes a fresh row
+# with its own customer identity (real per-run uniqueness is the point,
+# e.g. two customers sharing a name shouldn't merge into one purchase
+# history), so they can't be reused/found-by-marker like the shared
+# fixtures. conftest.py's autouse teardown deletes everything queued here
+# after each test, so re-running the suite doesn't leave permanent
+# customer rows behind.
+_created_skus = []
+
+
+def _delete_row_by_sku(sku):
+    """Delete the sheet row for sku, if it's still there -- a test that
+    already removed its own fixture (e.g. Cancel a Sale successfully
+    cancelling it) shouldn't blow up cleanup for every other unit created
+    in the same test."""
+    ws = inv.connect_to_sheet()
+    row_index = retry_on_quota(inv.find_row_index_by_sku, sku)
+    if row_index is not None:
+        retry_on_quota(ws.delete_rows, row_index)
+
+
+def cleanup_created_units():
+    """Delete every row queued in _created_skus. Called from conftest.py
+    after each test, pass or fail."""
+    while _created_skus:
+        _delete_row_by_sku(_created_skus.pop())
 
 
 def _find_by_marker(marker):
@@ -205,6 +235,35 @@ def create_fresh_available_unit(label, status="Available"):
     return _get_unit(sku)
 
 
+def create_unit_with_description(label, channel, body, name_collection=None, tech_specs=None):
+    """An Available unit that already has a saved Generated Descriptions
+    entry for one channel -- and optionally Name/Collection / Technical
+    Specs Inventory Notes tags -- written directly rather than through a
+    real Op 11 generation call. Op 11's own tests need an "existing
+    content" starting state for several scenarios (sibling-sync, Point 1
+    conflicts, the channel-scoped write conflict check); creating that
+    state via a real Anthropic call every time would be slow and, unlike
+    everywhere else this suite hits a real dependency, a real generation's
+    exact wording isn't something a test can assert on anyway -- only its
+    presence and its date stamp matter for these scenarios, both of which
+    this writes directly and precisely."""
+    unit = create_fresh_available_unit(label)
+    stamp = date.today().strftime("%m-%d-%Y")
+    updates = {
+        "Generated Descriptions": f"[{channel.upper()} - updated {stamp}]\n{body}\n\n{unit['SKU']}"
+    }
+    notes = unit.get("Inventory Notes", "")
+    if name_collection:
+        notes = f"{notes}\n[{stamp} · NAME/COLLECTION] {name_collection}".strip()
+    if tech_specs:
+        notes = f"{notes}\n[{stamp} · TECHNICAL SPECS] {tech_specs}".strip()
+    if name_collection or tech_specs:
+        updates["Inventory Notes"] = notes
+    row_index = inv.find_row_index_by_sku(unit["SKU"])
+    retry_on_quota(inv.update_row, row_index, updates)
+    return _get_unit(unit["SKU"])
+
+
 def create_sold_unit(label, customer_name="Pytest Sold Customer", phone=None):
     """A fully-paid Sold unit with real customer/sale data -- Cancel a Sale
     needs Customer Name and Date Sold populated (unlike
@@ -251,6 +310,7 @@ def create_sold_unit(label, customer_name="Pytest Sold Customer", phone=None):
     sku = _next_sku()
     row_data["SKU"] = sku
     retry_on_quota(inv.append_row, row_data)
+    _created_skus.append(sku)
     return _get_unit(sku)
 
 
@@ -297,6 +357,7 @@ def create_sold_unit_blank_total_cost(label, customer_name="Pytest Blank Cost Cu
     sku = _next_sku()
     row_data["SKU"] = sku
     retry_on_quota(inv.append_row, row_data)
+    _created_skus.append(sku)
     return _get_unit(sku)
 
 
@@ -347,4 +408,5 @@ def create_partial_payment_unit(label, customer_name="Pytest Outstanding Custome
     sku = _next_sku()
     row_data["SKU"] = sku
     retry_on_quota(inv.append_row, row_data)
+    _created_skus.append(sku)
     return _get_unit(sku)

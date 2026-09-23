@@ -11,6 +11,7 @@ Requires inventory.py's MODE to be "test" -- every test here asserts that
 before spawning, and refuses to run otherwise, since these scripts type
 real answers into real prompts and confirm real writes.
 """
+import os
 import re
 import time
 
@@ -28,7 +29,19 @@ DEFAULT_TIMEOUT = 35  # generous: covers real ECB-rate and Sheets API round-trip
                        # with headroom for occasional slow responses during a long
                        # sequential run of many live-API-dependent tests
 
+# Computed relative to this file's own location, not the invoking shell's cwd --
+# pytest.ini's testpaths only resolves correctly when pytest itself is run from
+# the repo root, which leaves the process's actual OS cwd at the repo root too.
+# pexpect.spawn()'s command string is resolved against that cwd, not sys.path,
+# so "python3 inventory.py" alone silently fails to find the file unless this
+# is passed explicitly.
+_APP_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "inventory_management_system"))
+
 _CONNECT_ERROR = "Could not connect to Google Sheets"
+# Not a hardcoded option count -- the exact number has already gone stale once
+# (still read "(1-11)" after Op 11 pushed Exit to option 12), silently making
+# every spawn_app() call time out instead of ever detecting a successful spawn.
+_MAIN_MENU_PROMPT = "Select an option \\(1-\\d+\\):"
 _SPAWN_RETRIES = 4
 _SPAWN_RETRY_DELAY = 15  # seconds -- Google's Sheets/OAuth quota window is ~100s;
                           # a full retry budget of ~45s plus natural time spent
@@ -56,9 +69,9 @@ def spawn_app(timeout=DEFAULT_TIMEOUT):
     last_output = ""
     for attempt in range(1, _SPAWN_RETRIES + 1):
         child = pexpect.spawn("python3 inventory.py", timeout=timeout,
-                               encoding="utf-8", dimensions=(60, 160))
+                               encoding="utf-8", dimensions=(60, 160), cwd=_APP_DIR)
         try:
-            index = child.expect([_CONNECT_ERROR, "Select an option \\(1-11\\):"], timeout=timeout)
+            index = child.expect([_CONNECT_ERROR, _MAIN_MENU_PROMPT], timeout=timeout)
         except pexpect.exceptions.EOF:
             index = 0  # crashed before printing the menu -- treat as the connect error
         if index == 1:
