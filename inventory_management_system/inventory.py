@@ -6324,6 +6324,7 @@ def generate_report_menu():
         import generate_report as _report_module
         importlib.reload(_report_module)   # always run the latest version on disk
         generate_report = _report_module.generate_report
+        EmailDeliveryError = _report_module.EmailDeliveryError
     except Exception as e:
         # Broad on purpose: this block only imports/reloads the report
         # generator, it doesn't generate anything yet. A missing module
@@ -6377,6 +6378,14 @@ def generate_report_menu():
         pdf_path = generate_report(ptype, start, end, label, send_email=send_email, mode=MODE)
         print(f"\n\033[38;5;202m✓ Report complete.\033[0m")
         print(f"\033[2m  {pdf_path}\033[0m")
+    except EmailDeliveryError as e:
+        # The PDF built fine -- only the email failed. _send() already
+        # printed the specific SMTP error inline, so don't repeat it here,
+        # just correct the framing: this is a completed report, not a
+        # failed one (e.pdf_path is set in generate_report()).
+        print(f"\n\033[38;5;202m✓ Report complete.\033[0m")
+        print(f"\033[2m  {e.pdf_path}\033[0m")
+        return
     except Exception as e:
         # Return to the Main Menu instead of re-raising -- every other
         # operation's failure path does the same (show the warning, then
