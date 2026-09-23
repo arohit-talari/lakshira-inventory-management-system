@@ -27,7 +27,7 @@ The IMS closes both gaps directly: it hardcodes the reference tables into real p
 
 This is the operational-system stage's own stack. The data warehouse (MySQL/AWS RDS) and BI layer (Tableau) that this system feeds are covered in the main [README](../README.md), not duplicated here.
 
-## The Ten Operations
+## The Eleven Operations
 
 1. **Add Inventory**
 2. **Edit Inventory Details**
@@ -39,16 +39,17 @@ This is the operational-system stage's own stack. The data warehouse (MySQL/AWS 
 8. **Cancel a Sale**
 9. **Customer Insights**
 10. **Generate Report**
+11. **Generate Product Description**: added after the original 10, for a separate need discovery hadn't scoped -- AI-assisted Instagram/Shopify/WhatsApp caption generation grounded in the business's own brand voice, not generic copy
 
-Every write operation follows the same guided shape: look up → validate status/eligibility → collect fields one at a time → show a full confirmation summary → require explicit confirmation → write → confirm success. Errors surface in plain English at the point of entry, not after the fact. See [Architecture](ARCHITECTURE.md) for the data model, SKU generation logic, currency handling, and per-operation detail.
+Every write operation follows the same guided shape: look up → validate status/eligibility → collect fields one at a time → show a full confirmation summary → require explicit confirmation → write → confirm success. Errors surface in plain English at the point of entry, not after the fact. Generate Product Description follows this same discipline at its write step, but adds an AI generation call, an optional completeness follow-up round, and a multi-turn refinement loop in the middle, since what it produces is a draft to react to, not a fixed set of values. See [Architecture](ARCHITECTURE.md) for the data model, SKU generation logic, currency handling, and per-operation detail.
 
 ## Validation and Testing
 
 Before this system could go live and be trusted with real customer and financial data, it had to be rigorously tested to ensure it solved the business's core problem. Architecting and designing all the operations and business logic the system would depend on wasn't the bar. Validation was run through a structured UAT (User Acceptance Testing) process, which surfaced 355 defects against business workflows and stakeholder-observed scenarios, each classified by business risk rather than technical severity (23 assessed as Critical), and each traced back to a specific requirement or a specific gap in how the manual process previously worked. That process is what transformed a working script that could theoretically handle the business's workflows into a system the stakeholder could actually depend on for day-to-day operations.
 
-**A two-tier, 222-test automated regression suite locks each resolved defect in place:**
+**A two-tier, 236-test automated regression suite locks each resolved defect in place:**
 - **147 tests** validating core business logic (pricing calculations, date/aging rules, report metrics) in isolation
-- **75 tests** driving the full guided workflow end-to-end against a live test environment, covering all 10 operations: correct-path completion, appropriate rejection of invalid states, validation-error handling, and cancellation paths
+- **89 tests** driving the full guided workflow end-to-end against a live test environment, covering all 11 operations: correct-path completion, appropriate rejection of invalid states, validation-error handling, and cancellation paths
 
 That validation effort covered four distinct kinds of ground:
 - **Functional**: every operation's core workflow, verified against data state after each write
@@ -70,7 +71,7 @@ One specific risk that discipline caught: because more than one person can act o
 The validation effort above was run as a structured DMAIC (Define, Measure, Analyze, Improve, Control) cycle, closing the gap between the manual process and the delivered system:
 
 - **Define**: the manual, hand-edited spreadsheet was the source of the defects being eliminated: no validation, no audit trail, silent data-entry errors, no repeatable reporting process.
-- **Measure**: 355 defects identified and prioritized by business risk (23 Critical), against a 222-test suite establishing a repeatable baseline instead of ad hoc spot-checks.
+- **Measure**: 355 defects identified and prioritized by business risk (23 Critical), against a 236-test suite establishing a repeatable baseline instead of ad hoc spot-checks.
 - **Analyze**: every defect was root-caused against the actual business workflow it broke, never just patched at the symptom. A reporting mismatch, for example, was traced back to specific incomplete source records rather than written off as noise.
 - **Improve**: each defect resolved at its root cause, with the underlying process changed so the same class of issue can't recur. Fixing the immediate instance alone wasn't the goal.
 - **Control**: every fix locked behind a permanent regression test, re-run before any future change, functioning as the control mechanism in place of a physical control chart.
@@ -78,7 +79,7 @@ The validation effort above was run as a structured DMAIC (Define, Measure, Anal
 **Specific Lean Six Sigma tools applied here, beyond DMAIC as a label:**
 
 - **Poka-yoke (mistake-proofing)**: every constrained business field (status, category, weave type, sales channel) is a validated pick-list, never free text. An entire class of data-entry defect is made structurally impossible, no longer just discouraged.
-- **Standardized work**: all 10 operations follow an identical structure: look up → validate → collect → confirm → write, so the system behaves predictably for a non-technical user regardless of which task they're performing.
+- **Standardized work**: all 11 operations follow the same look up → validate → collect → confirm → write discipline at the write step, so the system behaves predictably for a non-technical user regardless of which task they're performing. Generate Product Description extends that same discipline around a materially different core (AI-assisted content generation) rather than departing from it.
 - **Waste elimination (Muda)**: manual cross-referencing and calculation (motion/waiting waste) replaced by automation; recurring data-entry defects (defect waste) prevented at the point of entry; a report that once required manually compiling numbers across tabs now generates on demand.
 - **Kaizen (continuous improvement)**: the system evolved across the engagement through a repeated structure: audit → fix → validate, rather than one large rewrite.
 
@@ -96,6 +97,11 @@ pip install -r requirements.txt
 cd inventory_management_system
 cp .env.example .env   # fill in your own values
 # place a Google service account key as credentials.json in this directory
+# Generate Product Description's photo upload additionally needs a real
+# Google account's OAuth client secret (oauth_client_secret.json, same
+# directory) and DRIVE_PHOTOS_ROOT_ID set in .env -- service accounts have
+# no Drive storage quota of their own, so this piece runs as OAuth user
+# delegation instead. Not required for the other 10 operations.
 cd ..
 
 python3 inventory_management_system/inventory.py
@@ -112,13 +118,14 @@ pytest tests/test_interactive_*.py -v -s                        # Tier 2 -- need
 
 ```
 inventory_management_system/
-  inventory.py             # the CLI -- all 10 operations
+  inventory.py             # the CLI -- all 11 operations
+  description_generator.py # Op 11's Claude API conversation, prompt construction, and Drive photo upload
   generate_report.py       # PDF report generation + structured executive summary via the Claude API
   report_config.py         # reporting configuration (fonts, brand colors, secrets loading)
   scheduler.py             # automated report scheduling (macOS launchd)
   assets/                  # fonts and logo used by generated PDF reports
   .env.example             # template for the .env this system reads at runtime
-tests/                     # 222 tests across both tiers
+tests/                     # 236 tests across both tiers
 docs/
   ARCHITECTURE.md          # data model, SKU logic, currency handling, per-operation detail
   STAKEHOLDER_DISCOVERY.md # the requirements-gathering framework that shaped every decision above

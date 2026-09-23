@@ -85,4 +85,4 @@ The session ran as a free-flowing conversation, not an interrogation: starting w
 
 ---
 
-*This framework, run once as a single combined session, directly informed the data model and the 10 operations described in [Architecture](ARCHITECTURE.md). Every one of those decisions traces back to a specific answer given here.*
+*This framework, run once as a single combined session, directly informed the data model and 10 of the 11 operations described in [Architecture](ARCHITECTURE.md). Every one of those 10 traces back to a specific answer given here. The 11th operation (Generate Product Description) was added later, for a separate need this framework never covered -- it doesn't trace back to an answer in this session, and is called out as such in Architecture rather than folded in silently.*

@@ -22,7 +22,7 @@ Building the system around the constraint of a non-technical primary user with l
 
 ## 3. Data Model
 
-The master sheet has 39 columns. A few worth calling out:
+The master sheet has 41 columns. A few worth calling out:
 
 | Column | Entry method |
 |---|---|
@@ -33,6 +33,7 @@ The master sheet has 39 columns. A few worth calling out:
 | **Gross Profit / Markup % / Margin %** | All derived, never entered directly |
 | **Days to Sell / Days in Inventory / Aging Bucket / Dead Stock Flag** | Formula-driven in the sheet itself; the script reads these, never writes them |
 | **Status** | Constrained to a fixed set (`Available`, `Reserved`, `Sold`, `Sold - Partial Payment`, `Unassigned`), never free text |
+| **Photos / Generated Descriptions** | Written by Generate Product Description (§6) only; a Drive link and the unit's per-channel marketing captions, respectively |
 
 The `Unassigned` status is a deliberate design choice: a SKU can be generated in sequence with no physical unit behind it yet, preserving the numbering sequence without corrupting cost and pricing columns with placeholder data.
 
@@ -54,7 +55,7 @@ Two pricing paths, user's choice:
 
 Either path recalculates Gross Profit, Markup %, and Margin % automatically, and warns (without blocking) if the result falls below a configured margin threshold. A low-margin sale is sometimes the right call, but it should never happen by accident.
 
-## 6. The Ten Operations
+## 6. The Eleven Operations
 
 1. **Add Inventory**: new SKU, cost and pricing entry, ECB-rate-derived cost basis
 2. **Edit Inventory Details**: amend an existing unit's fields, with cost-field edits triggering a full pricing recalculation
@@ -66,12 +67,15 @@ Either path recalculates Gross Profit, Markup %, and Margin % automatically, and
 8. **Cancel a Sale**: reverse a sale, restore the unit to `Available`, track any pending refund
 9. **Customer Insights**: lifetime and period-scoped purchase history, spend, and outstanding balance per customer
 10. **Generate Report**: a full PDF business-intelligence report spanning financial performance, customer and sales behavior, and inventory and supply-chain health, capped with a structured Claude API executive summary and targeted recommendations, plus optional email delivery
+11. **Generate Product Description**: added after the original 10, for a separate need discovery hadn't scoped. A multi-turn Claude API conversation generates Instagram, Shopify, and WhatsApp captions for a unit, grounded in the business's own brand voice, per-weave-type reference material, and the operator's own notes and attached photos, not generic template copy. A completeness check asks follow-up questions before generating if the notes given are too thin to write from; the operator can refine the draft across further conversation turns before locking it in. Two structural details set this operation apart from the other 10: a *sibling-sync* mechanism that offers to propagate a corrected Name/Collection or Technical Specs fact into a unit's other already-generated channel captions (so a fix made writing the Shopify caption doesn't leave a stale claim sitting in the Instagram one), and a write-time concurrency check scoped to just the channel actually being written, rather than the whole cell, so a concurrent edit to a different channel never blocks or gets silently overwritten by this one.
 
-Every write operation follows the same shape: look up, validate status/eligibility, collect fields one at a time, show a full confirmation summary, require explicit confirmation, write, confirm success. Nothing is written to the sheet without that final confirmation step.
+Every write operation follows the same core shape: look up, validate status/eligibility, collect fields one at a time, show a full confirmation summary, require explicit confirmation, write, confirm success. Nothing is written to the sheet without that final confirmation step. Generate Product Description follows this same discipline at its write step, but the middle of its flow is meaningfully richer than the other 10: an AI generation call, an optional completeness follow-up round, and a multi-turn refinement loop sit between "collect fields" and "confirm," since the thing being produced is a generated draft to react to, not a fixed set of values to enter.
 
 ## 7. Concurrency Safety
 
 More than one person can touch the same record at once: two staff members, or the same person across two sessions, could act on the same inventory unit at the same time. Without a safeguard, a system would let the second write silently overwrite the first, losing a price change, a payment, or a status update with no way to know it happened, so this was scoped as a hard requirement, not an edge case to accept. Claude Code implemented that requirement as a re-read-and-compare check: every write-path operation re-reads the target row immediately before committing and compares it against the state it started from, and if anything relevant changed in the meantime (a status flip, a cost edit, a payment recorded by someone else), the write is rejected with a clear explanation instead of silently overwriting it. Verified directly: two sessions editing the same unit at once, with the second write correctly rejected once the first one's change had landed.
+
+Generate Product Description needed a variant of this rather than the same check verbatim: its Generated Descriptions cell holds all three channels' captions together, so an unscoped re-read-and-compare would falsely reject a Shopify write just because someone else had separately updated the Instagram caption on the same unit. The check there is scoped to just the channel actually being written, and a genuine same-channel conflict shows the operator what changed and asks them to decide, rather than automatically discarding the caption they'd just finished generating.
 
 ## 8. Test/Live Mode
 
@@ -85,3 +89,4 @@ A single `MODE` variable at the top of `inventory.py` switches the entire system
 - Overwrites the append-only note columns; every note action appends, never replaces
 - Assigns a category code that's already mapped to a different weave type
 - Sends customer Personally Identifiable Information (PII) through anything other than the sheet API itself: no third-party storage beyond the sheet and the business's own MySQL warehouse
+- Sends anything other than unit photos to a third party outside that boundary: Generate Product Description sends attached photos to the Claude API for vision-grounded caption generation and stores them via Google Drive (a folder the business owner's own account owns, not a service account), the one deliberate exception to the rule above, and it's scoped to unit photos only, never customer data
