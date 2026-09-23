@@ -491,6 +491,19 @@ def _connect(mode):
     client = gspread.authorize(creds)
     return client.open_by_key(SHEET_IDS[mode]).worksheet(WORKSHEET_NAME)
 
+def _get_reserver_name(notes):
+    """Extract the reserver's name from the Inventory Notes reservation line
+    -- Customer Name on the sheet is only ever populated at actual sale
+    time via Record a Sale, so it's always blank for a unit that's
+    currently Reserved but not yet sold. Mirrors inventory.py's own
+    _get_reserver_name() exactly, since that's the only place this name
+    is ever recorded before a sale exists."""
+    for line in (notes or "").split('\n'):
+        if 'Reserved by ' in line:
+            after = line.split('Reserved by ', 1)[1]
+            return after.split(' —')[0].strip()
+    return None
+
 # ── Data loading ───────────────────────────────────────────────────────────────
 def _find_cancel_line(txn, start, end):
     """Return the specific CANCEL note line whose date falls within
@@ -885,28 +898,37 @@ def _metrics(data, start, end, ps, pe, period_type):
         s = r.get("Status","").strip()
         if s: snap[s] += 1
 
-    # Aging (Available only). The 180+ bucket mirrors the sheet's own Dead
-    # Stock Flag formula exactly -- AND(Status="Available", days>=180,
-    # Selling Price (USD)<>"", Total Cost (USD)<>"") -- so this report's
-    # "180+ days" count matches what filtering the sheet on Dead Stock
-    # actually returns, instead of drifting from it. The boundary is
-    # >=180 (not >180) and it additionally requires both price columns to
-    # be populated, since the sheet won't flag a unit as Dead Stock while
-    # either is blank even if it's aged past 180 days.
+    # Aging (Available + Reserved -- unsold is unsold regardless of status,
+    # matching the 2026-09-16 sheet-side fix to Days in Inventory/Aging
+    # Bucket). "180+" here is a combined total, not restaging-specific --
+    # dead_available below is the Available-only subset that actually
+    # mirrors the sheet's Dead Stock Flag formula exactly -- AND(Status=
+    # "Available", days>=180, Selling Price (USD)<>"", Total Cost (USD)<>"")
+    # -- since restaging only ever applies to a unit nobody's already
+    # claimed. The boundary is >=180 (not >180) and additionally requires
+    # both price columns to be populated, since the sheet won't flag a unit
+    # as Dead Stock while either is blank even if it's aged past 180 days.
     aging = {"0–30":[], "31–60":[], "61–90":[], "91–180":[], "180+": []}
+    dead_available = []
+    reserved_units = []
     for r in all_r:
-        if r.get("Status","").strip() != "Available": continue
+        status = r.get("Status","").strip()
+        if status == "Reserved":
+            reserved_units.append(r)
+        if status not in ("Available", "Reserved"): continue
         da = _parse_date(r.get("Date Acquired",""))
         d = _days_since(da, reference=today)
         if d is None: continue
-        is_dead_stock = (d >= 180
+        is_dead_stock = (status == "Available"
+                          and d >= 180
                           and str(r.get("Selling Price (USD)","")).strip() != ""
                           and str(r.get("Total Cost (USD)","")).strip() != "")
+        if is_dead_stock: dead_available.append(r)
         if   d <= 30:     aging["0–30"].append(r)
         elif d <= 60:     aging["31–60"].append(r)
         elif d <= 90:     aging["61–90"].append(r)
-        elif is_dead_stock: aging["180+"].append(r)
-        else:             aging["91–180"].append(r)
+        elif d < 180:     aging["91–180"].append(r)
+        else:             aging["180+"].append(r)
 
     # Outstanding
     total_out  = sum(_flt(r.get("Amount Outstanding (USD)")) for r in data["outstanding"])
@@ -971,7 +993,7 @@ def _metrics(data, start, end, ps, pe, period_type):
         op_cnt=op_cnt, add_cnt=add_cnt, cl_cnt=cl_cnt,
         sell_through=sell_through, avg_dts=avg_dts, turnover=turnover,
         snap=dict(snap),
-        aging=aging,
+        aging=aging, dead_available=dead_available, reserved_units=reserved_units,
         outstanding=data["outstanding"], total_out=total_out, avg_collect_days=avg_collect_days,
         unsold_cnt=unsold_cnt, cash_exposure=cash_exposure, months_on_hand=months_on_hand,
         below_cost_rows=below_cost_rows, below_cost_cnt=below_cost_cnt,
@@ -1582,20 +1604,30 @@ def _payment_methods_ready(pm, total_units):
     unknown = pm.get("Unknown", {"count": 0})["count"]
     return (total_units - unknown) / total_units >= _PAYMENT_COVERAGE_THRESHOLD
 
-_BRAND_CONTEXT_PATH = os.path.join(BASE_DIR, "Brand_Context_Checklist.md")
+_BRAND_CONTEXT_DIR = os.path.join(BASE_DIR, "..", "docs")
+_BRAND_CONTEXT_FILES = [
+    "Brand_Context_Checklist.md",
+    "Brand_Context_Followup_Questions.md",
+    "Brand_Context_Followup_Questions_2.md",
+]
 
 def _load_brand_context():
-    """Read the filled-in Brand & Product Context Checklist fresh on every
-    call (not cached) so an edit to the file takes effect on the very next
-    report generated, with no code change or restart needed. Missing file
-    degrades to an empty string rather than failing the whole report --
-    the executive summary still works, just without the brand-specific
-    grounding, exactly like before this was wired in."""
-    try:
-        with open(_BRAND_CONTEXT_PATH, "r", encoding="utf-8") as f:
-            return f.read().strip()
-    except OSError:
-        return ""
+    """Read the filled-in Brand & Product Context Checklist plus both
+    follow-up rounds, fresh on every call (not cached) so an edit to any
+    of them takes effect on the very next report generated, with no code
+    change or restart needed. Each file degrades independently -- a
+    missing or unreadable file is skipped rather than failing the whole
+    report, exactly like before this was wired in."""
+    parts = []
+    for filename in _BRAND_CONTEXT_FILES:
+        try:
+            with open(os.path.join(_BRAND_CONTEXT_DIR, filename), "r", encoding="utf-8") as f:
+                content = f.read().strip()
+        except OSError:
+            continue
+        if content:
+            parts.append(content)
+    return "\n\n---\n\n".join(parts)
 
 def _claude_summary(m, period_label, report_type):
     if ANTHROPIC_API_KEY.startswith("PLACEHOLDER"):
@@ -1624,7 +1656,8 @@ def _claude_summary(m, period_label, report_type):
             "returning_customers": len(m["ret_c"]),
             "outstanding_balance_usd": round(m["total_out"], 2),
             "avg_days_outstanding": round(m["avg_collect_days"]),
-            "units_180_plus_days": len(m["aging"]["180+"]),
+            "units_180_plus_days_total": len(m["aging"]["180+"]),
+            "units_180_plus_days_needing_restaging": len(m["dead_available"]),
             "sell_through_rate_pct": round(m["sell_through"]*100, 1),
             "avg_days_to_sell": round(m["avg_dts"]),
             "inventory_turnover": round(m["turnover"], 2),
@@ -2809,43 +2842,96 @@ def _sec_snapshot(m, gen_date_str):
 # ── Section 10: Aging Inventory ───────────────────────────────────────────────
 def _sec_aging(m):
     buckets = m["aging"]
+    # Dict key stays "91–180" (matching _metrics()'s aging dict) even though
+    # the boundary fix on 2026-09-16 moved day 180 itself into "180+" --
+    # only the printed label below changed, to "91–179", to describe what
+    # this bucket actually contains now.
     labels  = ["0–30","31–60","61–90","91–180","180+"]
+    display_labels = {"0–30":"0–30", "31–60":"31–60", "61–90":"61–90", "91–180":"91–179", "180+":"180+"}
     bucket_tags = {
         "0–30":   "Fresh",
         "31–60":  "Normal",
         "61–90":  "Slowing",
         "91–180": "Aging",
-        "180+":   "⚠  Dead Stock Watch",
+        "180+":   "Aged",
     }
-    rows = [[f"{lb} Days: {bucket_tags[lb]}", str(len(buckets[lb]))] for lb in labels]
+    rows = [[f"{display_labels[lb]} Days: {bucket_tags[lb]}", str(len(buckets[lb]))] for lb in labels]
     heading = _sec("Aging Inventory", anchor="aging_inventory") + [
         Paragraph(
-            "Available units only, grouped by days in stock, surfacing which unsold "
-            "pieces are at growing risk of tying up capital the longer they go unsold.",
+            "Available and Reserved units -- unsold is unsold regardless of status -- "
+            "grouped by days in stock, surfacing which pieces are at growing risk of "
+            "tying up capital the longer they go unsold.",
             ST["note"]
         ),
         Spacer(1, 4),
     ]
     story = _sec_table(heading, ["Aging Bucket","Units"], rows, [CONTENT_W*.7, CONTENT_W*.3],
-                        totals=["Total", str(sum(len(buckets[lb]) for lb in labels))])
+                        totals=["Total", str(sum(len(buckets[lb]) for lb in buckets))])
     story.append(Spacer(1, 10))
 
-    dead = buckets["180+"]
+    today = date.today()
+
+    # Active Reservations -- every currently-Reserved unit regardless of age,
+    # not just the ones in the 180+ bucket above: a reservation gone stale
+    # after 10 days is worth a follow-up just as much as one sitting on a
+    # unit acquired a year ago. Informational, not a call to action, so this
+    # gets a plain sub-heading rather than a colored callout -- it's
+    # explaining a subset of the data, not flagging something to fix.
+    reserved = m["reserved_units"]
+    if reserved:
+        def _reserved_sort_key(x):
+            d = _days_since(_parse_date(x.get("Date Acquired","")), reference=today)
+            return -1 if d is None else d
+
+        rs_rows = []
+        for r in sorted(reserved, key=_reserved_sort_key, reverse=True):
+            d = _days_since(_parse_date(r.get("Date Acquired","")), reference=today)
+            days = str(d) if d is not None else "—"
+            rs_rows.append([
+                r.get("SKU",""),
+                _get_reserver_name(r.get("Inventory Notes","")) or "—",
+                r.get("Reserved Date",""),
+                days,
+                _usd(_flt(r.get("Selling Price (USD)"))),
+            ])
+        story += _sec_table(
+            [Paragraph("Active Reservations", ST["sub_head"]),
+             Paragraph(
+                 "Every unit currently on hold, oldest in stock first, regardless of "
+                 "how long it's actually been reserved -- a signal for who to check "
+                 "in with, not a restaging list.",
+                 ST["note"]
+             ),
+             Spacer(1, 4)],
+            ["SKU","Customer","Reserved","Days in Stock","Price"],
+            rs_rows,
+            [CONTENT_W*.18, CONTENT_W*.30, CONTENT_W*.18, CONTENT_W*.16, CONTENT_W*.18],
+            compact=True, center_cols={2,3}, left_cols={1}
+        )
+        story.append(Spacer(1, 10))
+
+    dead = m["dead_available"]
     if dead:
+        total_180 = len(buckets["180+"])
+        reserved_180 = len([r for r in buckets["180+"] if r.get("Status","").strip() == "Reserved"])
         # BURNT_ORANGE marks this as the report's most severe tier, distinct
         # from the routine ROSE used for outstanding balances elsewhere --
         # 180+ days is the same "more painful inflection point" the dashboard
         # weights toward in Inventory Age Distribution, so it earns a color
         # one step past the standard attention-needed flag.
+        reserved_clause = (
+            f", {reserved_180} of which {'is' if reserved_180==1 else 'are'} Reserved "
+            f"and not eligible for restaging"
+        ) if reserved_180 else ""
         callout_block = [_callout(
-            f"{len(dead)} unit{'s' if len(dead)!=1 else ''} "
-            f"{'have' if len(dead)!=1 else 'has'} been in inventory for over 180 days. "
-            f"Consider restaging across marketing platforms and developing stronger unit "
-            f"narratives before any pricing adjustment.",
+            f"{total_180} unit{'s' if total_180!=1 else ''} "
+            f"{'have' if total_180!=1 else 'has'} been in inventory for over 180 days"
+            f"{reserved_clause}. Consider restaging the {len(dead)} available unit"
+            f"{'s' if len(dead)!=1 else ''} across marketing platforms and developing "
+            f"stronger unit narratives before any pricing adjustment.",
             bg=BURNT_ORANGE
         ), Spacer(1, 8)]
 
-        today = date.today()
         ds_rows = []
         # Every row here already passed _metrics()'s aging filter (which
         # excludes blank/malformed/future Date Acquired from every bucket,
@@ -2973,6 +3059,15 @@ def _build_pdf(pdf_path, period_label, report_type, period_type,
     doc.build(story)
 
 # ── Email ──────────────────────────────────────────────────────────────────────
+class EmailDeliveryError(Exception):
+    """Raised when the PDF report built successfully but the email failed to
+    send, so callers can distinguish that from a genuine report-generation
+    failure -- the report is still done, just not delivered. generate_report()
+    sets .pdf_path to the already-built PDF's path before re-raising, so a
+    caller catching this (inventory.py's Generate Report menu, scheduler.py)
+    can still tell the user/log where the report landed."""
+    pdf_path = None
+
 def _send(pdf_path, period_label, report_type, m):
     if EMAIL_SENDER.startswith("PLACEHOLDER"):
         print("\033[2m  Email not configured — PDF saved locally.\033[0m")
@@ -3018,6 +3113,7 @@ def _send(pdf_path, period_label, report_type, m):
         print(f"\033[2m  Emailed to {len(EMAIL_RECIPIENTS)} recipient(s).\033[0m")
     except Exception as e:
         print(f"\033[33m  ⚠  Email could not be sent ({e}). The PDF was still saved at {pdf_path}.\033[0m")
+        raise EmailDeliveryError(str(e)) from e
 
 # ── Main entry ─────────────────────────────────────────────────────────────────
 def generate_report(period_type: str, start: date, end: date,
@@ -3090,6 +3186,10 @@ def generate_report(period_type: str, start: date, end: date,
     # returned path itself.
     if send_email:
         print("\033[2m  Sending email...\033[0m")
-        _send(pdf_path, period_label, type_label, metrics)
+        try:
+            _send(pdf_path, period_label, type_label, metrics)
+        except EmailDeliveryError as e:
+            e.pdf_path = pdf_path
+            raise
 
     return pdf_path

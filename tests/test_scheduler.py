@@ -10,10 +10,16 @@ function body, not at module load time).
 
 Run: pytest tests/test_scheduler.py -v
 """
+import email
+import logging
+import smtplib
 from datetime import date
+from unittest.mock import ANY, MagicMock
 
 import pytest
 
+import generate_report as gr
+import report_config as rc
 import scheduler as sch
 
 
@@ -117,3 +123,180 @@ class TestRunTaskSelection:
 
     def test_first_of_non_quarter_month_fires_monthly_only(self, monkeypatch):
         assert self._tasks_for(monkeypatch, 2026, 8, 1) == ["monthly"]
+
+
+class TestNotifyFailure:
+    """_notify_failure() is the last line of defense when a scheduled report
+    fails -- an unattended run means nobody's watching /tmp/lakshira_scheduler.log,
+    so this must never itself raise, even if the SMTP send fails. Mocks
+    smtplib.SMTP so this needs no live credentials or network access."""
+
+    def _armed_smtp_mock(self, monkeypatch, error):
+        mock_srv = MagicMock()
+        mock_srv.sendmail.side_effect = error
+        mock_smtp_cls = MagicMock()
+        mock_smtp_cls.return_value.__enter__.return_value = mock_srv
+        monkeypatch.setattr(sch.smtplib, "SMTP", mock_smtp_cls)
+        return mock_srv
+
+    def _configure_email(self, monkeypatch):
+        monkeypatch.setattr(rc, "EMAIL_SENDER", "sender@example.com")
+        monkeypatch.setattr(rc, "EMAIL_PASSWORD", "fake-password")
+        monkeypatch.setattr(rc, "EMAIL_RECIPIENTS", ["recipient@example.com"])
+        monkeypatch.setattr(rc, "SMTP_SERVER", "smtp.example.com")
+        monkeypatch.setattr(rc, "SMTP_PORT", 587)
+
+    def _body_of(self, raw_message):
+        # MIMEText base64-encodes the body by default -- decode it back to
+        # plain text rather than substring-matching the raw SMTP payload.
+        return email.message_from_string(raw_message).get_payload(decode=True).decode()
+
+    def test_smtp_failure_is_swallowed_and_logged(self, monkeypatch, caplog):
+        self._configure_email(monkeypatch)
+        mock_srv = self._armed_smtp_mock(monkeypatch, smtplib.SMTPException("boom"))
+
+        with caplog.at_level(logging.ERROR):
+            sch._notify_failure(
+                "monthly", "July 2026", RuntimeError("report generation failed")
+            )
+
+        assert mock_srv.sendmail.called
+        assert "Could not send failure notice email" in caplog.text
+
+    def test_placeholder_sender_short_circuits_without_calling_smtp(self, monkeypatch):
+        monkeypatch.setattr(rc, "EMAIL_SENDER", "PLACEHOLDER@example.com")
+        monkeypatch.setattr(rc, "EMAIL_RECIPIENTS", ["recipient@example.com"])
+        mock_smtp_cls = MagicMock()
+        monkeypatch.setattr(sch.smtplib, "SMTP", mock_smtp_cls)
+
+        sch._notify_failure("monthly", "July 2026", RuntimeError("x"))
+
+        mock_smtp_cls.assert_not_called()
+
+    def test_email_stage_uses_generated_but_not_sent_wording(self, monkeypatch):
+        self._configure_email(monkeypatch)
+        mock_srv = self._armed_smtp_mock(monkeypatch, error=None)
+
+        sch._notify_failure(
+            "monthly", "July 2026", RuntimeError("smtp down"), stage="email"
+        )
+
+        sent_body = self._body_of(mock_srv.sendmail.call_args[0][2])
+        assert "generated successfully" in sent_body
+        assert "email delivery failed" in sent_body
+        assert "failed to generate" not in sent_body
+
+    def test_default_stage_uses_generation_failed_wording(self, monkeypatch):
+        self._configure_email(monkeypatch)
+        mock_srv = self._armed_smtp_mock(monkeypatch, error=None)
+
+        sch._notify_failure("monthly", "July 2026", RuntimeError("sheets unreachable"))
+
+        sent_body = self._body_of(mock_srv.sendmail.call_args[0][2])
+        assert "failed to generate" in sent_body
+        assert "generated successfully" not in sent_body
+
+
+class TestRunNotifiesOnFailure:
+    """End-to-end (within run()) proof that D-353 is actually closed: an
+    email-delivery failure inside generate_report() reaches _notify_failure()
+    with stage='email', a generation failure reaches it with the default
+    stage, and a clean run never calls it at all (no false-positive alert on
+    the happy path). generate_report itself is mocked at the function level
+    -- no Sheets/PDF/SMTP work happens."""
+
+    def _run_on(self, monkeypatch, y, m, d):
+        monkeypatch.setattr(rc, "SCHEDULER_MODE", "live")  # gate must be open for these
+        _freeze(monkeypatch, y, m, d)  # 1st of a non-quarter month -> exactly one task: monthly
+
+    def test_email_delivery_failure_triggers_notify_with_email_stage(self, monkeypatch):
+        self._run_on(monkeypatch, 2026, 8, 1)
+        err = gr.EmailDeliveryError("smtp down")
+        monkeypatch.setattr(gr, "generate_report", MagicMock(side_effect=err))
+        mock_notify = MagicMock()
+        monkeypatch.setattr(sch, "_notify_failure", mock_notify)
+
+        sch.run()
+
+        mock_notify.assert_called_once_with("monthly", "July 2026", err, stage="email")
+
+    def test_generation_failure_triggers_notify_with_default_stage(self, monkeypatch):
+        self._run_on(monkeypatch, 2026, 8, 1)
+        err = RuntimeError("sheets unreachable")
+        monkeypatch.setattr(gr, "generate_report", MagicMock(side_effect=err))
+        mock_notify = MagicMock()
+        monkeypatch.setattr(sch, "_notify_failure", mock_notify)
+
+        sch.run()
+
+        mock_notify.assert_called_once_with("monthly", "July 2026", err)
+
+    def test_successful_run_never_calls_notify_failure(self, monkeypatch):
+        self._run_on(monkeypatch, 2026, 8, 1)
+        monkeypatch.setattr(
+            gr, "generate_report", MagicMock(return_value="/fake/Lakshira_Monthly.pdf")
+        )
+        mock_notify = MagicMock()
+        monkeypatch.setattr(sch, "_notify_failure", mock_notify)
+
+        sch.run()
+
+        mock_notify.assert_not_called()
+
+
+class TestSchedulerModeGate:
+    """SCHEDULER_MODE is the kill switch: cron can invoke run() daily and
+    safely no-op until a human explicitly sets SCHEDULER_MODE=live in .env.
+    Every case here is on a real trigger day (Jan 1, fires all three tasks)
+    so a passing "nothing happened" result is actually proof the gate did
+    the blocking, not just that there was nothing to do that day."""
+
+    def test_default_test_mode_never_calls_generate_report(self, monkeypatch):
+        monkeypatch.setattr(rc, "SCHEDULER_MODE", "test")
+        _freeze(monkeypatch, 2026, 1, 1)
+        mock_generate = MagicMock()
+        monkeypatch.setattr(gr, "generate_report", mock_generate)
+
+        sch.run()
+
+        mock_generate.assert_not_called()
+
+    def test_unset_or_unrecognized_value_also_blocks(self, monkeypatch):
+        monkeypatch.setattr(rc, "SCHEDULER_MODE", "")
+        _freeze(monkeypatch, 2026, 1, 1)
+        mock_generate = MagicMock()
+        monkeypatch.setattr(gr, "generate_report", mock_generate)
+
+        sch.run()
+
+        mock_generate.assert_not_called()
+
+    def test_live_mode_proceeds_to_generate_report(self, monkeypatch):
+        monkeypatch.setattr(rc, "SCHEDULER_MODE", "live")
+        _freeze(monkeypatch, 2026, 1, 1)
+        mock_generate = MagicMock(return_value="/fake/Lakshira_Monthly.pdf")
+        monkeypatch.setattr(gr, "generate_report", mock_generate)
+
+        sch.run()
+
+        assert mock_generate.called
+
+    def test_broken_report_config_import_returns_safely(self, monkeypatch, caplog):
+        # Simulate a missing/broken .env (e.g. a required key absent) the
+        # same way the real import would fail -- must log and return, never
+        # raise, since an unattended cron run has no one to catch it.
+        import builtins
+        real_import = builtins.__import__
+
+        def _blow_up_on_report_config(name, *args, **kwargs):
+            if name == "report_config":
+                raise KeyError("SCHEDULER_MODE")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", _blow_up_on_report_config)
+        _freeze(monkeypatch, 2026, 1, 1)
+
+        with caplog.at_level(logging.ERROR):
+            sch.run()  # must not raise
+
+        assert "Could not load report_config" in caplog.text

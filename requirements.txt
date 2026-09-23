@@ -6,6 +6,7 @@ phonenumbers==9.0.35
 questionary==2.1.1
 reportlab==5.0.0
 anthropic==0.120.2
+mysql-connector-python==26.7.0
 prompt_toolkit
 python-dotenv
 requests

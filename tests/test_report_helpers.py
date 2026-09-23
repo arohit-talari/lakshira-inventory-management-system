@@ -9,11 +9,14 @@ where the logic mirrors inventory.py's.
 
 Run: pytest tests/test_report_helpers.py -v
 """
+import smtplib
 from datetime import date
+from unittest.mock import MagicMock
 
 import pytest
 
 import generate_report as gr
+from generate_report import EmailDeliveryError
 
 
 # ── _flt ────────────────────────────────────────────────────────────────────────
@@ -209,3 +212,68 @@ class TestPrior:
         # function's own docstring/comment for why.
         with pytest.raises(ValueError):
             gr._prior("weekly", date(2026, 8, 1), date(2026, 8, 7))
+
+
+# ── _send (D-353: email delivery failure must not be swallowed) ───────────────────
+class TestSend:
+    """_send() used to catch every exception, print a warning, and return
+    normally -- meaning an SMTP failure during a scheduled report email was
+    silently lost (scheduler.py's run() saw a clean return and never called
+    _notify_failure()). It now raises EmailDeliveryError on a real send
+    failure so callers can tell "generated but not emailed" apart from
+    "email not configured" (which is still a silent no-op) and "generation
+    itself failed". No live network/credentials: smtplib.SMTP is mocked."""
+
+    def _metrics(self):
+        return {"rev": 1000.0, "p_rev": 900.0, "margin": 0.35}
+
+    def _configure_email(self, monkeypatch):
+        monkeypatch.setattr(gr, "EMAIL_SENDER", "sender@example.com")
+        monkeypatch.setattr(gr, "EMAIL_PASSWORD", "fake-password")
+        monkeypatch.setattr(gr, "EMAIL_RECIPIENTS", ["recipient@example.com"])
+        monkeypatch.setattr(gr, "SMTP_SERVER", "smtp.example.com")
+        monkeypatch.setattr(gr, "SMTP_PORT", 587)
+
+    def _armed_smtp_mock(self, monkeypatch, error=None):
+        mock_srv = MagicMock()
+        if error is not None:
+            mock_srv.sendmail.side_effect = error
+        mock_smtp_cls = MagicMock()
+        mock_smtp_cls.return_value.__enter__.return_value = mock_srv
+        monkeypatch.setattr(gr.smtplib, "SMTP", mock_smtp_cls)
+        return mock_srv
+
+    def _fake_pdf(self, tmp_path):
+        pdf_path = tmp_path / "report.pdf"
+        pdf_path.write_bytes(b"%PDF-fake")
+        return str(pdf_path)
+
+    def test_smtp_failure_raises_EmailDeliveryError_not_swallowed(self, monkeypatch, tmp_path, capsys):
+        self._configure_email(monkeypatch)
+        mock_srv = self._armed_smtp_mock(monkeypatch, smtplib.SMTPException("boom"))
+
+        with pytest.raises(EmailDeliveryError):
+            gr._send(self._fake_pdf(tmp_path), "July 2026", "Monthly Report", self._metrics())
+
+        assert mock_srv.sendmail.called
+        assert "Email could not be sent" in capsys.readouterr().out
+
+    def test_successful_send_does_not_raise(self, monkeypatch, tmp_path):
+        self._configure_email(monkeypatch)
+        mock_srv = self._armed_smtp_mock(monkeypatch)
+
+        gr._send(self._fake_pdf(tmp_path), "July 2026", "Monthly Report", self._metrics())
+
+        assert mock_srv.sendmail.called
+
+    def test_unconfigured_email_still_a_silent_no_op(self, monkeypatch, tmp_path):
+        # Placeholder sender / no recipients is an intentional "email off"
+        # state, not a delivery failure -- must not raise, and must not
+        # touch smtplib at all.
+        monkeypatch.setattr(gr, "EMAIL_SENDER", "PLACEHOLDER@example.com")
+        mock_smtp_cls = MagicMock()
+        monkeypatch.setattr(gr.smtplib, "SMTP", mock_smtp_cls)
+
+        gr._send(self._fake_pdf(tmp_path), "July 2026", "Monthly Report", self._metrics())
+
+        mock_smtp_cls.assert_not_called()

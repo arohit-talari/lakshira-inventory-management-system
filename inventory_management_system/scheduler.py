@@ -48,12 +48,17 @@ def _annual():
     return "annual", start, end, label
 
 
-def _notify_failure(ptype, label, err):
+def _notify_failure(ptype, label, err, stage="generate"):
     """Best-effort failure email so a scheduled-report failure is visible to
     the same people who'd normally receive the report, not just buried in
     /tmp/lakshira_scheduler.log (unattended runs mean nobody's watching the
     log, and /tmp isn't durable -- macOS periodic maintenance purges stale
-    files there)."""
+    files there).
+
+    stage distinguishes "the report itself failed to build" (default) from
+    "the report built fine but the email failed to send" (stage='email',
+    passed by run() when generate_report() raises EmailDeliveryError) so the
+    alert text tells a human what to actually go check."""
     try:
         from report_config import (
             EMAIL_SENDER, EMAIL_PASSWORD, EMAIL_RECIPIENTS,
@@ -66,8 +71,15 @@ def _notify_failure(ptype, label, err):
         log.warning("Email not configured — failure notice not sent.")
         return
     try:
+        if stage == "email":
+            lead = (
+                f"The scheduled {ptype} report for {label} was generated "
+                f"successfully, but the email delivery failed."
+            )
+        else:
+            lead = f"The scheduled {ptype} report for {label} failed to generate."
         msg = MIMEText(
-            f"The scheduled {ptype} report for {label} failed to generate.\n\n"
+            f"{lead}\n\n"
             f"Error: {err}\n\n"
             f"See /tmp/lakshira_scheduler.log on the machine running the "
             f"scheduler for full details.\n\n"
@@ -86,6 +98,18 @@ def _notify_failure(ptype, label, err):
 
 
 def run():
+    try:
+        from report_config import SCHEDULER_MODE
+    except Exception as e:
+        log.error("Could not load report_config to check SCHEDULER_MODE: %s", e)
+        return
+    if SCHEDULER_MODE != "live":
+        log.info(
+            "Scheduler is in '%s' mode -- no report will be generated or sent. "
+            "Set SCHEDULER_MODE=live in .env to activate.", SCHEDULER_MODE,
+        )
+        return
+
     today = date.today()
     tasks = []
 
@@ -106,7 +130,7 @@ def run():
         return
 
     try:
-        from generate_report import generate_report
+        from generate_report import generate_report, EmailDeliveryError
     except Exception as e:
         log.error("Could not import generate_report: %s", e)
         sys.exit(1)
@@ -116,6 +140,12 @@ def run():
         try:
             path = generate_report(ptype, start, end, label, send_email=True)
             log.info("Report saved: %s", path)
+        except EmailDeliveryError as e:
+            log.error(
+                "Report generated for %s (%s) but email delivery failed: %s",
+                ptype, label, e,
+            )
+            _notify_failure(ptype, label, e, stage="email")
         except Exception as e:
             log.exception("Failed to generate %s report: %s", ptype, e)
             _notify_failure(ptype, label, e)
