@@ -3,9 +3,17 @@
 # =============================================================================
 
 import os
+import sys
 import re
+import shlex
+import termios
+import time
 import difflib
 import textwrap
+import readline  # noqa: F401 -- unused directly, but importing it switches every
+                 # ask_text()/input() call to real line-editing instead of a raw
+                 # canonical-mode read, which is what was silently truncating
+                 # pasted answers past ~1024 bytes (the terminal's MAX_CANON cap)
 
 import requests
 import questionary
@@ -175,6 +183,8 @@ COLUMNS = {
     "Amount Received (USD)": 37,
     "Amount Outstanding (USD)": 38,
     # Column 39: Dead Stock Flag — formula-driven, never written by script
+    "Photos": 40,
+    "Generated Descriptions": 41,
 }
 
 
@@ -367,6 +377,34 @@ def append_row(row_data):
               f"You may need to drag Margin Distribution, Days to Sell, Days in "
               f"Inventory, Aging Bucket, and Dead Stock Flag down manually for this row.")
 
+    # Same bold-tag formatting as update_row() -- append_row() is a
+    # separate write path (a brand-new row, not an update to an existing
+    # one), so it doesn't automatically inherit update_row()'s formatting
+    # step and needs its own call here.
+    for col_name in _BOLD_TAG_COLUMNS:
+        if col_name in row_data:
+            _apply_bold_tag_formatting(next_row, col_name)
+
+
+def _with_connection_retry(fn, attempts=3, delay=1.5):
+    """Retry fn() when the connection to Google's servers drops mid-request
+    (requests.exceptions.ConnectionError, e.g. a pooled HTTP connection
+    Google silently closed between calls -- the client only finds out on
+    the next attempt to use it, surfacing as "Connection aborted" /
+    RemoteDisconnected with no response at all). This is a known,
+    transient failure mode, not a real rejection of the request -- a
+    short pause and a fresh connection on the next attempt is normally
+    enough. A genuine API error (bad data, permission, quota) is a
+    different exception (gspread.exceptions.APIError) and is never
+    retried here, since retrying it would just fail the same way again."""
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn()
+        except requests.exceptions.ConnectionError:
+            if attempt == attempts:
+                raise
+            time.sleep(delay * attempt)
+
 
 def update_row(sheet_row_number, updates):
     """
@@ -381,7 +419,9 @@ def update_row(sheet_row_number, updates):
     set explicitly to match update_cell()'s own default, so every
     field is interpreted exactly as before (dates recognized as
     dates, etc.) -- only the number of API calls changes, not how
-    any value is read once it arrives.
+    any value is read once it arrives. Wrapped in _with_connection_retry()
+    since a dropped connection here means the entire write is lost
+    outright, not just delayed.
     """
     ws = connect_to_sheet()
     cells = []
@@ -390,7 +430,16 @@ def update_row(sheet_row_number, updates):
         if idx is not None:
             cells.append(gspread.Cell(row=sheet_row_number, col=idx, value=_sheet_safe(value)))
     if cells:
-        ws.update_cells(cells, value_input_option="USER_ENTERED")
+        _with_connection_retry(lambda: ws.update_cells(cells, value_input_option="USER_ENTERED"))
+
+    # Bold-tag formatting, applied as a separate step after the value write
+    # above has already succeeded -- every caller of update_row() gets this
+    # automatically for free, with no changes needed at any individual call
+    # site, since this function is the single shared choke point they all
+    # already go through.
+    for col_name in _BOLD_TAG_COLUMNS:
+        if col_name in updates:
+            _apply_bold_tag_formatting(sheet_row_number, col_name)
 
 
 def get_row_by_sheet_index(sheet_row_number):
@@ -581,6 +630,33 @@ def _warn(message):
     print(f"\n\033[33m⚠  {message}\033[0m")
 
 
+# Same orange every questionary.select() menu already uses for a confirmed
+# choice (class:answer, #FF9D00 -- 38;5;214 is the identical 256-color
+# downgrade of that same hex value, not a separate approximation), applied
+# here to whatever the user types into a raw input()-based prompt. Left
+# active in the prompt string itself so the terminal's own line-echo
+# renders the typed characters in it directly -- no per-keystroke handling
+# needed, just resetting it once input() returns. Bold (;1) matches
+# questionary's own answer style exactly -- that class is fg:#FF9D00 bold,
+# not just the color alone, so leaving bold off here would have made these
+# prompts orange but not bold while every menu and ask_long_text() field
+# is both.
+_ANSWER_COLOR = "\033[38;5;214;1m"
+
+# Same orange, for ask_long_text()'s prompt_toolkit-based prompts -- the ""
+# (default) rule colors anything not given its own class, which in
+# practice means only the typed/pasted answer, since the label is always
+# tagged "label" specifically to keep it out from under this rule. "label"
+# needs its own explicit foreground, not just "bold" -- prompt_toolkit's
+# style cascade merges an unset property on a more specific class with the
+# "" rule underneath it, so "bold" alone still inherits the "" rule's
+# orange fg instead of overriding it; only an explicit color actually
+# does. #ffffff is the closest match to plain "\033[1m" (bold, no forced
+# color) used everywhere else, though it forces true white rather than
+# inheriting the terminal's own default foreground the way \033[1m does.
+_LONG_TEXT_ANSWER_STYLE = Style.from_dict({"": "#FF9D00 bold", "label": "#ffffff bold"})
+
+
 def _looks_like_phone_query(query):
     """Whether a customer-search query looks like an attempted phone-number
     search rather than a name. A bare query.isdigit() check only catches
@@ -594,10 +670,29 @@ def _looks_like_phone_query(query):
     return bool(normalized) and normalized.isdigit()
 
 
+def _flush_stdin():
+    """Discards any input already sitting in the terminal's queue but not
+    yet read. A pasted multi-line answer only ever submits its first line
+    to the input() call that's waiting on it -- every further line the
+    paste contained is still sitting there, unread, and would otherwise
+    get silently consumed as keystrokes by whatever interactive prompt
+    (questionary.select(), another input() call) runs next -- auto-picking
+    an option or auto-answering a field from stale paste content instead
+    of actually waiting for the operator. Called right after every
+    input()-based prompt below so nothing bleeds across to the next one.
+    No-ops if stdin isn't a real terminal (e.g. piped/redirected input)."""
+    try:
+        termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+    except (termios.error, ValueError, OSError):
+        pass
+
+
 def ask_number(prompt, allow_zero=False, allow_negative=False):
     """Return a validated float from user input."""
     while True:
-        raw = input(f"\n\033[1m{prompt}\033[0m ").strip()
+        raw = input(f"\n\033[1m{prompt}\033[0m {_ANSWER_COLOR}").strip()
+        print("\033[0m", end="")
+        _flush_stdin()
         try:
             value = float(raw)
             if not allow_negative and value < 0:
@@ -633,7 +728,9 @@ def ask_date(prompt, not_future=False, not_before=None, not_after=None,
     """
     while True:
         suffix = " (Type 'back' to cancel)" if allow_back else ""
-        raw = input(f"\n\033[1m{prompt} (MM-DD-YYYY){suffix}:\033[0m ").strip()
+        raw = input(f"\n\033[1m{prompt} (MM-DD-YYYY){suffix}:\033[0m {_ANSWER_COLOR}").strip()
+        print("\033[0m", end="")
+        _flush_stdin()
         if allow_back and raw.lower() == "back":
             return None
         try:
@@ -658,7 +755,9 @@ def ask_date(prompt, not_future=False, not_before=None, not_after=None,
 def ask_yes_no(prompt):
     """Return True for yes, False for no."""
     while True:
-        raw = input(f"\n\033[1m{prompt} (yes/no):\033[0m ").strip().lower()
+        raw = input(f"\n\033[1m{prompt} (yes/no):\033[0m {_ANSWER_COLOR}").strip().lower()
+        print("\033[0m", end="")
+        _flush_stdin()
         if raw in ("yes", "y"):
             return True
         if raw in ("no", "n"):
@@ -680,6 +779,23 @@ def ask_yes_no(prompt):
 _MENU_STYLE = Style.from_dict({
     "back-option":      "#777777",
     "register-option":  "#5fafff",
+    # questionary's own message template is " {} ".format(message) -- always
+    # a leading space, with no public setting to remove it, unlike qmark,
+    # which has no forced padding at all. Every menu in this file put its
+    # real question text in message and left qmark="" for a "no question-
+    # mark glyph" look, which meant every menu sat one column right of every
+    # other prompt/box/warning in the app (all of which are flush left).
+    # Swapping the real text into qmark instead (message="") removes that
+    # stray indent -- this rule exists so qmark's text still reads the same
+    # way it always did (bold, default terminal color): questionary's own
+    # default style gives "question" bold with no explicit color, but gives
+    # "qmark" a colored, non-bold #5f819d. "bold" alone here isn't enough to
+    # undo that -- prompt_toolkit merges non-conflicting attributes across
+    # styles rather than one replacing the other, so "bold" would just add
+    # onto the inherited #5f819d rather than clearing it. fg:default is
+    # needed to explicitly reset the color, the same fix already used for
+    # ask_long_text()'s label class earlier in this file.
+    "qmark":            "fg:default bold",
 })
 
 def _back_choice(text="Back"):
@@ -696,6 +812,20 @@ def _visible_len(s):
 
 def _pad_visible(s, width):
     return s + " " * max(0, width - _visible_len(s))
+
+def _notes_section_rows(*note_lines):
+    """Build a _print_boxed NOTES section's rows from one or more finished
+    [MM-DD-YYYY · TAG] note lines -- the exact text about to be appended to
+    Inventory/Transaction Notes, not a raw pre-tag draft of it. Each line is
+    wrapped at 46 chars (the width already used for historical notes in
+    record_sale()'s partial-payment TRANSACTION SUMMARY) so one long
+    composed note can't stretch a box wider than its other sections need."""
+    rows = []
+    for line in note_lines:
+        if not line:
+            continue
+        rows.extend(f"  {wrapped}" for wrapped in textwrap.wrap(line, width=46))
+    return rows
 
 def _clip(name, width=20):
     """Truncate a free-text name to a fixed width for column-aligned list
@@ -720,7 +850,7 @@ def _print_boxed(title, sections):
     right before it."""
     body_lines = []
     if title is not None:
-        body_lines.append(f"  \033[1;38;5;178m{title}\033[0m")
+        body_lines.append(f"\033[1;38;5;178m{title}\033[0m")
         body_lines.append(_EQ_MARK)
     first = True
     for section_name, rows in sections:
@@ -729,7 +859,7 @@ def _print_boxed(title, sections):
         if not first:
             body_lines.append("")
         first = False
-        body_lines.append(f"\033[38;5;202m{section_name}\033[0m")
+        body_lines.append(f" \033[1;38;5;202m{section_name}\033[0m")
         body_lines.append(_SEP_MARK)
         body_lines.extend(rows)
     width = max([50] + [_visible_len(l) for l in body_lines if l not in (_SEP_MARK, _EQ_MARK)])
@@ -751,7 +881,46 @@ def _print_boxed(title, sections):
 def ask_text(prompt, required=True, blank_message="This field cannot be left blank. Please enter a value."):
     """Return a non-empty string (or empty string if not required)."""
     while True:
-        raw = " ".join(input(f"\n\033[1m{prompt}\033[0m ").split())
+        raw = " ".join(input(f"\n\033[1m{prompt}\033[0m {_ANSWER_COLOR}").split())
+        print("\033[0m", end="")
+        _flush_stdin()
+        if raw:
+            return raw
+        if not required:
+            return ""
+        _warn(blank_message)
+
+
+def ask_long_text(prompt, required=True, blank_message="This field cannot be left blank. Please enter a value."):
+    """Like ask_text(), but for fields expecting real prose that might get
+    pasted in rather than typed -- e.g. copied out of a terminal window
+    that had wrapped it, which embeds a real newline at every wrap point.
+    ask_text()'s input() has no readline-style line editing attached, so it
+    only ever submits a pasted answer's first line; everything after the
+    first embedded newline is silently lost, not just truncated.
+    prompt_toolkit manages the terminal itself and can absorb a full
+    multi-line paste as one input event instead.
+    Uses prompt_toolkit.shortcuts.prompt() directly rather than
+    questionary.text() -- questionary's text() always renders its message
+    as " {}".format(message), a fixed extra space with no way to turn it
+    off, which put a visible double space after every one of these
+    prompts where every other prompt in the app uses exactly one. Calling
+    prompt_toolkit directly means the message string is rendered exactly
+    as given, with the same single trailing space ask_text() already
+    uses -- and it's a stable, public entry point (the same one
+    questionary itself is built on), not a private internal being reached
+    into. The label is tagged its own explicit style class rather than
+    left as plain ANSI text -- prompt_toolkit applies the style dict's ""
+    (default) rule to everything it draws that isn't otherwise tagged,
+    typed text included, so without a separate class for the label the
+    same orange meant only for the typed answer bleeds into the label too."""
+    from prompt_toolkit.shortcuts import prompt as _pt_prompt
+    while True:
+        raw = _pt_prompt(
+            [("class:label", f"\n{prompt}"), ("", " ")],
+            style=_LONG_TEXT_ANSWER_STYLE,
+        )
+        raw = " ".join((raw or "").split())
         if raw:
             return raw
         if not required:
@@ -762,7 +931,9 @@ def ask_text(prompt, required=True, blank_message="This field cannot be left bla
 def ask_percent(prompt, allow_zero=True):
     """Return a validated float between 0 and 100."""
     while True:
-        raw = input(f"\n\033[1m{prompt}\033[0m ").strip()
+        raw = input(f"\n\033[1m{prompt}\033[0m {_ANSWER_COLOR}").strip()
+        print("\033[0m", end="")
+        _flush_stdin()
         try:
             value = float(raw)
             if value < 0 or value > 100:
@@ -783,10 +954,11 @@ def ask_contact_method():
     while True:
         print()
         contact_type = questionary.select(
-            "Point of Contact:",
+            "",
             choices=["Phone", "Instagram", "Email"],
-            qmark="",
+            qmark="Point of Contact:",
             instruction=" ",
+            style=_MENU_STYLE,
         ).unsafe_ask()
 
         if contact_type == "Phone":
@@ -805,7 +977,8 @@ def ask_contact_method():
 
         elif contact_type == "Instagram":
             while True:
-                raw = input("\nInstagram handle: @").strip()
+                raw = input(f"\n\033[1mInstagram handle:\033[0m @{_ANSWER_COLOR}").strip()
+                print("\033[0m", end="")
                 if not raw:
                     _warn("Instagram handle cannot be empty.")
                     continue
@@ -871,13 +1044,13 @@ def fetch_ecb_rate(date_mm_dd_yyyy, total_cost_usd=None):
     print(f"\n\033[38;5;202mEXCHANGE RATE\033[0m")
     print(_sep)
     if _is_fallback:
-        print(f"  {actual_date_str + ':':<14}1 USD = {rate:,.2f} INR")
+        print(f"  \033[1m{actual_date_str + ':':<14}\033[0m1 USD = {rate:,.2f} INR")
         print(f"  \033[2m(No rate for {date_mm_dd_yyyy} — using nearest business day)\033[0m")
     else:
-        print(f"  {date_mm_dd_yyyy + ':':<14}1 USD = {rate:,.2f} INR")
+        print(f"  \033[1m{date_mm_dd_yyyy + ':':<14}\033[0m1 USD = {rate:,.2f} INR")
     if total_cost_usd is not None:
         print()
-        print(f"  {'Total Cost:':<14}${total_cost_usd:,.2f}")
+        print(f"  \033[1m{'Total Cost:':<14}\033[0m${total_cost_usd:,.2f}")
     print(_sep)
     confirmed = ask_yes_no("Confirm this rate?")
 
@@ -959,8 +1132,14 @@ def get_unassigned_skus_for_category(category_code, raw_rows):
     return unassigned
 
 
-def generate_next_sku(category_code, raw_rows):
-    """Generate the next sequential SKU for a category, starting at 100."""
+def generate_next_sku(category_code, raw_rows, exclude_skus=None):
+    """
+    Generate the next sequential SKU for a category, starting at 100.
+    exclude_skus: SKUs already claimed but not yet written to the sheet
+        (e.g. earlier units in the same in-progress bulk intake batch) --
+        without these, this function can't see them and will hand out the
+        same serial twice within one batch.
+    """
     sku_col = COLUMNS["SKU"] - 1
     prefix = f"LAH-{category_code}"
     serials = []
@@ -973,11 +1152,16 @@ def generate_next_sku(category_code, raw_rows):
                 suffix = sku[len(prefix):]
                 if suffix.isdigit():
                     serials.append(int(suffix))
+    for sku in exclude_skus or ():
+        if sku.startswith(prefix):
+            suffix = sku[len(prefix):]
+            if suffix.isdigit():
+                serials.append(int(suffix))
     next_serial = max(serials) + 1 if serials else 100
     return f"{prefix}{next_serial}"
 
 
-def resolve_sku(category_code, weave_type):
+def resolve_sku(category_code, weave_type, batch_reserved_skus=None):
     """
     Full SKU resolution flow:
     1. Check for Unassigned SKUs in category — offer them first.
@@ -985,41 +1169,46 @@ def resolve_sku(category_code, weave_type):
     3. Confirm with user before returning.
     Returns (sku, sheet_row_number_or_None).
       sheet_row_number is set only when an Unassigned row is being reused.
+    batch_reserved_skus: SKUs already resolved by earlier units in the same
+        in-progress bulk intake batch (not yet written to the sheet) --
+        excluded from the Unassigned offer list and from sequential
+        generation so this unit is never handed a SKU already claimed
+        earlier in the same batch.
     """
     raw_rows = get_raw_rows()
     unassigned = get_unassigned_skus_for_category(category_code, raw_rows)
+    if batch_reserved_skus:
+        unassigned = [s for s in unassigned if s not in batch_reserved_skus]
 
     chosen_existing_row = None
 
     if unassigned:
-        print(f"\nThe following units are currently unassigned in this category:")
-        for sku in unassigned:
-            print(f"  {sku}")
-        use_existing = ask_yes_no("Would you like to assign this unit to one of these SKUs?")
-        if use_existing:
-            print()
-            chosen_sku = questionary.select(
-                "Select an unassigned unit:",
-                choices=unassigned + [
-                    questionary.Separator(" "),
-                    _back_choice("None of these — generate a new SKU"),
-                ],
-                qmark="",
-                instruction=" ",
-                style=_MENU_STYLE,
-            ).unsafe_ask()
-            if chosen_sku != "None of these — generate a new SKU" and chosen_sku is not None:
-                chosen_existing_row = find_row_index_by_sku(chosen_sku)
-                sku = chosen_sku
-                print(f"\nYou have selected: {sku}")
-                confirmed = ask_yes_no("Confirm?")
-                if not confirmed:
-                    print("\nAdd cancelled. Returning to Main Menu.")
-                    return None, None
-                return sku, chosen_existing_row
+        print()
+        chosen_sku = questionary.select(
+            "",
+            choices=unassigned + [
+                questionary.Separator("─" * 44),
+                questionary.Choice(
+                    title=[("class:register-option", "+ Generate a new SKU")],
+                    value="Generate a new SKU",
+                ),
+            ],
+            qmark=f"{weave_type} has unassigned units available -- select one, or generate a new SKU:",
+            instruction=" ",
+            style=_MENU_STYLE,
+        ).unsafe_ask()
+        if chosen_sku != "Generate a new SKU" and chosen_sku is not None:
+            chosen_existing_row = find_row_index_by_sku(chosen_sku)
+            sku = chosen_sku
+            print(f"\n\033[1mYou have selected:\033[0m {sku}")
+            confirmed = ask_yes_no("Confirm?")
+            if not confirmed:
+                print("\nAdd cancelled. Returning to Main Menu.")
+                return None, None
+            return sku, chosen_existing_row
 
-    sku = generate_next_sku(category_code, raw_rows)
-    print(f"\nYour SKU will be: {sku}")
+    sku = generate_next_sku(category_code, raw_rows, exclude_skus=batch_reserved_skus)
+    print(f"\n\033[1mYour SKU will be:\033[0m {sku}")
     confirmed = ask_yes_no("Confirm?")
     if not confirmed:
         print("\nAdd cancelled. Returning to Main Menu.")
@@ -1088,11 +1277,39 @@ def get_status_color(status):
     return ""
 
 
-def get_margin_color(margin_pct):
-    """Return ANSI color code matching the sheet's Profit Margin % conditional formatting (3 tiers)."""
-    if margin_pct < 15:
+_HERO_WEAVE_KEYWORDS = ("Kanjivaram", "Gadwal", "Banaras", "Benaras")
+
+def _is_hero_weave(weave_type):
+    """Hero/high-exclusivity margin tier: the Kanjivaram, Gadwal, and
+    Banaras families specifically -- flagship, signature weaves the
+    brand positions above the standard catalog. Blouses never qualify
+    even when a hero family name appears in their own name (e.g.
+    "Kanjivaram Silk Blouse") -- they're an accessory piece, not the
+    hero saree itself. Ikat is deliberately excluded too, even when a
+    brand is moving it upmarket, since it isn't one of the three named
+    hero weaves."""
+    if WEAVE_GARMENT_TYPES.get(weave_type) == "Blouse":
+        return False
+    return any(kw in weave_type for kw in _HERO_WEAVE_KEYWORDS)
+
+def _margin_thresholds(weave_type):
+    """(flag_below, target_floor) for margin, tier-aware: hero categories
+    carry a materially higher bar than supplemental ones, rather than one
+    flat threshold applied to every weave type regardless of tier."""
+    if _is_hero_weave(weave_type):
+        return 20, 25   # flag below 20%; target 25-30%+
+    return 15, 18        # flag below 15%; target 18-22%
+
+def get_margin_color(margin_pct, weave_type):
+    """Return ANSI color code for margin %, tier-aware: hero weaves
+    (Kanjivaram/Gadwal/Banaras) are held to a higher bar than
+    supplemental ones. Matches the sheet's own Profit Margin %
+    conditional formatting in spirit (3 tiers), but the exact cutoffs
+    differ by weave family instead of being one flat line."""
+    flag, target = _margin_thresholds(weave_type)
+    if margin_pct < flag:
         return "\033[31m"   # red
-    if margin_pct < 20:
+    if margin_pct < target:
         return "\033[93m"   # yellow
     return "\033[32m"       # green
 
@@ -1129,6 +1346,122 @@ def _get_reserver_name(notes):
     return None
 
 
+def _get_last_description_spec(notes, tag):
+    """Extract the most recent entry for one specific tag (NAME/COLLECTION
+    or TECHNICAL SPECS) from Inventory Notes, if any -- tracked
+    independently per tag rather than as one combined entry, since a name
+    doesn't change because zari purity got corrected, and vice versa.
+    Combining them would mean updating one silently loses visibility into
+    the other, since only the single most recent entry is ever surfaced."""
+    matches = re.findall(rf"\[.+? · {re.escape(tag)}\] (.+)", notes or "")
+    return matches[-1] if matches else None
+
+
+def _replace_description_spec(notes, tag):
+    """Removes any existing NAME/COLLECTION or TECHNICAL SPECS line for this
+    tag, so the caller can append a fresh one in its place. Unlike
+    reservation or reprice notes -- genuine historical events, correctly
+    append-only -- these two are current-state facts about the unit: a
+    correction replaces the old claim rather than piling up alongside it,
+    which would just make Inventory Notes noisier without adding any real
+    version history anyone needs."""
+    lines = (notes or "").split("\n")
+    kept = [l for l in lines if not re.match(rf"\[.+? · {re.escape(tag)}\] ", l)]
+    return "\n".join(kept).strip()
+
+
+_INVENTORY_NOTES_FIXED_ORDER = ["NAME/COLLECTION", "TECHNICAL SPECS", "REFUND"]
+
+def _normalize_inventory_notes(notes):
+    """Restructures Inventory Notes into a fixed-order block up top --
+    singleton, current-state facts that can only ever have one instance at
+    a time (Name/Collection, Technical Specs, a pending Refund) -- followed
+    by everything else in its original, undisturbed order below. Applied as
+    the final step wherever Inventory Notes gets written, regardless of
+    which operation is doing the writing, so a unit's notes read the same
+    structure no matter which operation touched them most recently.
+
+    Only ever reorders whole lines, never rewrites content, and never
+    touches the relative order of the genuinely event-based tags
+    (RESERVATION, REPRICE, CORRECTION, etc.) against each other -- those
+    can recur over a unit's lifetime, and the actual sequence they happened
+    in is real information a fixed template would destroy. Idempotent:
+    normalizing already-normalized notes returns them unchanged, so this
+    is safe to apply defensively at every write site without needing to
+    track whether a given call already normalized."""
+    lines = (notes or "").split("\n")
+    fixed = {}
+    rest = []
+    for line in lines:
+        matched_tag = next(
+            (tag for tag in _INVENTORY_NOTES_FIXED_ORDER
+             if re.match(rf"\[.+? · {re.escape(tag)}\] ", line)),
+            None,
+        )
+        if matched_tag:
+            fixed[matched_tag] = line
+        else:
+            rest.append(line)
+    fixed_block = [fixed[tag] for tag in _INVENTORY_NOTES_FIXED_ORDER if tag in fixed]
+    return "\n".join(fixed_block + rest).strip()
+
+
+_BOLD_TAG_COLUMNS = ("Inventory Notes", "Transaction Notes", "Generated Descriptions")
+
+def _bold_tag_format_runs(text):
+    """Returns Sheets API textFormatRuns bolding every leading [...] tag at
+    the start of a line -- [date · TAG] in Inventory/Transaction Notes,
+    [CHANNEL - updated date] in Generated Descriptions -- leaving the rest
+    of each entry's actual content regular weight. An explicit unbolded
+    run at index 0 covers any older content that predates this tagging
+    convention entirely, rather than leaving its format undefined.
+    Character indices are UTF-16 code-unit offsets, which matches Python's
+    str indexing for all realistic content here (dates, tag names, prices,
+    prose) -- would only diverge for characters outside the Unicode Basic
+    Multilingual Plane, which nothing written to these columns is expected
+    to contain."""
+    matches = list(re.finditer(r"^\[.+?\]", text, re.MULTILINE))
+    runs = [] if matches and matches[0].start() == 0 else [{"startIndex": 0, "format": {"bold": False}}]
+    for m in matches:
+        runs.append({"startIndex": m.start(), "format": {"bold": True}})
+        runs.append({"startIndex": m.end(), "format": {"bold": False}})
+    return runs
+
+def _apply_bold_tag_formatting(sheet_row_number, col_name):
+    """Applies bold-tag formatting to one Notes/Description cell as a
+    separate, additional step after its value has already been written by
+    update_row() -- deliberately independent of that write so the
+    already-validated plain-value path every operation in this app relies
+    on never has to change. Uses fields="textFormatRuns" specifically, so
+    this call can only ever affect formatting, never the cell's actual
+    value, even if something here is wrong. A formatting failure is
+    reported but never blocks or reverses the value write that already
+    succeeded."""
+    col_idx = COLUMNS.get(col_name)
+    if col_idx is None:
+        return
+    ws = connect_to_sheet()
+    current_value = get_row_by_sheet_index(sheet_row_number).get(col_name, "")
+    if not current_value:
+        return
+    try:
+        _spreadsheet_cache.batch_update({"requests": [{
+            "updateCells": {
+                "range": {
+                    "sheetId": ws.id,
+                    "startRowIndex": sheet_row_number - 1,
+                    "endRowIndex": sheet_row_number,
+                    "startColumnIndex": col_idx - 1,
+                    "endColumnIndex": col_idx,
+                },
+                "rows": [{"values": [{"textFormatRuns": _bold_tag_format_runs(current_value)}]}],
+                "fields": "textFormatRuns",
+            }
+        }]})
+    except Exception as e:
+        _warn(f"Could not apply bold formatting to {col_name}: {e}. The note itself was still saved correctly.")
+
+
 def _reservation_days(reserved_date_str):
     """Return (days_held, is_expired) for a Reserved unit, or (None, False)
     if Reserved Date is blank/malformed -- or in the future, which can only
@@ -1139,7 +1472,7 @@ def _reservation_days(reserved_date_str):
     return (days, days > 7) if days is not None else (None, False)
 
 
-def check_pricing_warnings(margin_pct, markup_pct, gross_profit_usd=0, exit_label="Discard & exit", recalibrate_label="Recalibrate selling price"):
+def check_pricing_warnings(margin_pct, markup_pct, weave_type, gross_profit_usd=0, exit_label="Discard & exit", recalibrate_label="Recalibrate selling price"):
     """
     Display any applicable pricing alert, then always show the guided proceed menu.
       - Below cost: BELOW COST alert + menu.
@@ -1147,6 +1480,10 @@ def check_pricing_warnings(margin_pct, markup_pct, gross_profit_usd=0, exit_labe
       - Low margin only: LOW MARGIN alert + menu.
       - Low markup only: LOW MARKUP note + menu.
       - Neither: menu only, no alert.
+    weave_type: which margin tier applies -- hero (Kanjivaram/Gadwal/
+    Banaras) is flagged below 20%, everything else below 15%, a
+    tier-aware replacement for one flat threshold applied to every
+    weave type regardless of tier.
     Returns (proceed, warned): proceed=True (continue), False (re-enter), None (discard & exit).
     """
     warned = False
@@ -1157,18 +1494,21 @@ def check_pricing_warnings(margin_pct, markup_pct, gross_profit_usd=0, exit_labe
         print(f"Gross Profit is -${abs(gross_profit_usd):,.2f}. This unit will sell at a loss.")
         warned = True
     else:
+        flag_below, _ = _margin_thresholds(weave_type)
+        tier_label = "hero" if _is_hero_weave(weave_type) else "supplemental"
         low_markup = markup_pct < 7
-        low_margin = margin_pct < 15
-        color = get_margin_color(margin_pct)
+        low_margin = margin_pct < flag_below
+        color = get_margin_color(margin_pct, weave_type)
 
         if low_margin and low_markup:
             print(
-                f"\n{color}△ LOW MARGIN — Margin sits at {margin_pct:.1f}%, below the 15% threshold "
-                f"(Markup: {markup_pct:.1f}% — unusually low).\033[0m"
+                f"\n{color}△ LOW MARGIN — Margin sits at {margin_pct:.1f}%, below the {flag_below}% "
+                f"{tier_label}-tier threshold (Markup: {markup_pct:.1f}% — unusually low).\033[0m"
             )
             warned = True
         elif low_margin:
-            print(f"\n{color}△ LOW MARGIN — Margin sits at {margin_pct:.1f}%, below the 15% threshold.\033[0m")
+            print(f"\n{color}△ LOW MARGIN — Margin sits at {margin_pct:.1f}%, below the {flag_below}% "
+                  f"{tier_label}-tier threshold.\033[0m")
             warned = True
         elif low_markup:
             print(f"\n\033[33m⚠  LOW MARKUP\033[0m")
@@ -1178,14 +1518,14 @@ def check_pricing_warnings(margin_pct, markup_pct, gross_profit_usd=0, exit_labe
 
     print()
     choice = questionary.select(
-        "How would you like to proceed?",
+        "",
         choices=[
             "Proceed with this price",
             recalibrate_label,
             questionary.Separator(" "),
             _back_choice(exit_label),
         ],
-        qmark="",
+        qmark="How would you like to proceed?",
         instruction=" ",
         style=_MENU_STYLE,
     ).unsafe_ask()
@@ -1203,7 +1543,8 @@ def _enter_new_garment_type():
     Returns the resolved garment type name (new or matched existing), or None (back).
     """
     while True:
-        raw = " ".join(input("\nEnter new garment type name (or type 'back' to go back): ").split())
+        raw = " ".join(input(f"\n\033[1mEnter new garment type name (or type 'back' to go back):\033[0m {_ANSWER_COLOR}").split())
+        print("\033[0m", end="")
         if not raw or raw.lower() == "back":
             return None
 
@@ -1227,7 +1568,8 @@ def _enter_new_garment_type():
             if ask_yes_no("Did you mean one of these?"):
                 while True:
                     try:
-                        idx = int(input("\nSelect number: ").strip()) - 1
+                        idx = int(input(f"\n\033[1mSelect number:\033[0m {_ANSWER_COLOR}").strip()) - 1
+                        print("\033[0m", end="")
                         if 0 <= idx < len(gt_matches):
                             return gt_matches[idx]
                         _warn(f"Please enter a number between 1 and {len(gt_matches)}.")
@@ -1235,7 +1577,7 @@ def _enter_new_garment_type():
                         _warn("Please enter a valid number.")
             # user said no — fall through to confirm as genuinely new
 
-        print(f"\nNew garment type: {raw}.")
+        print(f"\n\033[1mNew garment type:\033[0m {raw}.")
         if ask_yes_no("Confirm?"):
             GARMENT_TYPES.append(raw)
             return raw
@@ -1258,7 +1600,7 @@ def select_or_add_weave_type():
         garment_is_new = False
         while True:
             garment_choice = questionary.select(
-                "Select garment type:",
+                "",
                 choices=GARMENT_TYPES + [
                     questionary.Separator("─" * 44),
                     questionary.Choice(
@@ -1268,7 +1610,7 @@ def select_or_add_weave_type():
                     questionary.Separator(" "),
                     _back_choice("Return to Main Menu"),
                 ],
-                qmark="",
+                qmark="Select garment type:",
                 instruction=" ",
                 style=_MENU_STYLE,
             ).unsafe_ask()
@@ -1299,7 +1641,8 @@ def select_or_add_weave_type():
         # the "Add new" duplicate-detection flow below for where fuzzy
         # matching is the better fit instead).
         while True:
-            query = input(f"\n\033[1mSearch {garment_choice} weave types (or press Enter to see all):\033[0m ").strip()
+            query = input(f"\n\033[1mSearch {garment_choice} weave types (or press Enter to see all):\033[0m {_ANSWER_COLOR}").strip()
+            print("\033[0m", end="")
             if not query:
                 display_names = filtered_names
                 break
@@ -1310,7 +1653,7 @@ def select_or_add_weave_type():
 
         print()
         selected = questionary.select(
-            f"Select {garment_choice} weave type:",
+            "",
             choices=display_names + [
                 questionary.Separator("─" * 44),
                 questionary.Choice(
@@ -1320,7 +1663,7 @@ def select_or_add_weave_type():
                 questionary.Separator(" "),
                 _back_choice("Change garment type"),
             ],
-            qmark="",
+            qmark=f"Select {garment_choice} weave type:",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
@@ -1335,7 +1678,8 @@ def select_or_add_weave_type():
         break  # fall through to Step 3 (add-new flow) below, outside the loop
 
     # Add new weave type flow — type-first, fuzzy-match second
-    raw = " ".join(input("\nEnter new weave type name (or press Enter / type 'back' to go back): ").split())
+    raw = " ".join(input(f"\n\033[1mEnter new weave type name (or press Enter / type 'back' to go back):\033[0m {_ANSWER_COLOR}").split())
+    print("\033[0m", end="")
     if not raw or raw.lower() == "back":
         print("Returning to weave type selection.")
         print()
@@ -1351,7 +1695,7 @@ def select_or_add_weave_type():
     matches = substring_matches if substring_matches else difflib.get_close_matches(raw, list(WEAVE_TYPES.keys()), n=3, cutoff=0.6)
 
     if len(matches) == 1:
-        print(f"\nClose match found: {matches[0]}")
+        print(f"\n\033[1mClose match found:\033[0m {matches[0]}")
         if ask_yes_no(f"Did you mean '{matches[0]}'?"):
             return matches[0], WEAVE_TYPES[matches[0]]
         # user said no — proceed as genuinely new
@@ -1359,7 +1703,7 @@ def select_or_add_weave_type():
     elif len(matches) > 1:
         print()
         pick = questionary.select(
-            "Multiple close matches found — did you mean one of these?",
+            "",
             choices=matches + [
                 questionary.Separator("─" * 44),
                 questionary.Choice(
@@ -1367,7 +1711,7 @@ def select_or_add_weave_type():
                     value="__NONE__",
                 ),
             ],
-            qmark="",
+            qmark="Multiple close matches found — did you mean one of these?",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
@@ -1394,9 +1738,10 @@ def select_or_add_weave_type():
 
     first = True
     while True:
-        prompt = "\nEnter a new category code for this weave type (or type 'back' to go back): " if first else "\nTry again (or type 'back'): "
+        prompt = "\n\033[1mEnter a new category code for this weave type (or type 'back' to go back):\033[0m " if first else "\n\033[1mTry again (or type 'back'):\033[0m "
         first = False
-        raw = input(prompt).strip()
+        raw = input(f"{prompt}{_ANSWER_COLOR}").strip()
+        print("\033[0m", end="")
         if not raw or raw.lower() == "back":
             print("Returning to weave type selection.")
             print()
@@ -1408,7 +1753,7 @@ def select_or_add_weave_type():
             continue
         break
 
-    print(f"\nNew weave type: {new_name}  —  Category Code: {new_code}")
+    print(f"\n\033[1mNew weave type:\033[0m {new_name}  —  \033[1mCategory Code:\033[0m {new_code}")
     confirmed = ask_yes_no("Confirm?")
     if not confirmed:
         print("Cancelled.")
@@ -1416,23 +1761,24 @@ def select_or_add_weave_type():
 
     # Garment type step — pre-filled from bucket, confirm or override
     label = "your new garment type" if garment_is_new else "based on your selection"
-    print(f"\nGarment type: {garment_choice} ({label}).")
+    print(f"\n\033[1mGarment type:\033[0m {garment_choice} ({label}).")
     print()
     garment_confirm = questionary.select(
-        "Is this correct?",
+        "",
         choices=["Yes", "No — select a different type"],
-        qmark="",
+        qmark="Is this correct?",
         instruction=" ",
+        style=_MENU_STYLE,
     ).unsafe_ask()
     if "No" in garment_confirm:
         print()
         garment_type = questionary.select(
-            "Select garment type:",
+            "",
             choices=GARMENT_TYPES + [
                 questionary.Separator(" "),
                 _back_choice(f"Keep '{garment_choice}' after all"),
             ],
-            qmark="",
+            qmark="Select garment type:",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
@@ -1468,17 +1814,33 @@ def select_or_add_supplier():
     Present supplier list. If user picks Add New, run the addition flow.
     Returns supplier name string.
     """
+    all_suppliers = sorted(SUPPLIERS, key=str.lower)
+
+    # Type-to-narrow search before the arrow-key list -- same convention as
+    # select_or_add_weave_type()'s Step 2 (substring match, not fuzzy: a
+    # deliberate fragment search, not a typo-tolerant lookup).
+    while True:
+        query = input(f"\n\033[1mSearch suppliers (or press Enter to see all):\033[0m {_ANSWER_COLOR}").strip()
+        print("\033[0m", end="")
+        if not query:
+            display_names = all_suppliers
+            break
+        display_names = [s for s in all_suppliers if query.lower() in s.lower()]
+        if display_names:
+            break
+        _warn(f"No supplier matches '{query}'. Try again, or press Enter to see all.")
+
     print()
     selected = questionary.select(
-        "Select supplier:",
-        choices=sorted(SUPPLIERS, key=str.lower) + [
+        "",
+        choices=display_names + [
             questionary.Separator("─" * 44),
             questionary.Choice(
                 title=[("class:register-option", "+ Add new supplier")],
                 value="Add new supplier",
             ),
         ],
-        qmark="",
+        qmark="Select supplier:",
         instruction=" ",
         style=_MENU_STYLE,
     ).unsafe_ask()
@@ -1488,7 +1850,8 @@ def select_or_add_supplier():
         return chosen
 
     # Add new supplier flow — type-first, fuzzy-match second
-    raw = " ".join(input("\nEnter supplier name (or press Enter / type 'back' to go back): ").split())
+    raw = " ".join(input(f"\n\033[1mEnter supplier name (or press Enter / type 'back' to go back):\033[0m {_ANSWER_COLOR}").split())
+    print("\033[0m", end="")
     if not raw or raw.lower() == "back":
         print("Returning to supplier selection.")
         return select_or_add_supplier()
@@ -1502,7 +1865,7 @@ def select_or_add_supplier():
     matches = substring_matches if substring_matches else difflib.get_close_matches(raw, SUPPLIERS, n=3, cutoff=0.6)
 
     if len(matches) == 1:
-        print(f"\nClose match found: {matches[0]}")
+        print(f"\n\033[1mClose match found:\033[0m {matches[0]}")
         if ask_yes_no(f"Did you mean '{matches[0]}'?"):
             return matches[0]
         # user said no — fall through to add as new
@@ -1510,7 +1873,7 @@ def select_or_add_supplier():
     elif len(matches) > 1:
         print()
         pick = questionary.select(
-            "Multiple close matches found — did you mean one of these?",
+            "",
             choices=matches + [
                 questionary.Separator("─" * 44),
                 questionary.Choice(
@@ -1518,7 +1881,7 @@ def select_or_add_supplier():
                     value="__NONE__",
                 ),
             ],
-            qmark="",
+            qmark="Multiple close matches found — did you mean one of these?",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
@@ -1530,7 +1893,7 @@ def select_or_add_supplier():
         print(f"\nNo existing supplier matches that name.")
 
     new_name = raw
-    print(f"\nYou are adding: {new_name}")
+    print(f"\n\033[1mYou are adding:\033[0m {new_name}")
     confirmed = ask_yes_no("Confirm?")
     if not confirmed:
         print("Cancelled.")
@@ -1698,7 +2061,8 @@ def select_country():
     ]
 
     while True:
-        raw = input("\nType to search by country name (or press Enter to go back): ").strip()
+        raw = input(f"\n\033[1mType to search by country name (or press Enter to go back):\033[0m {_ANSWER_COLOR}").strip()
+        print("\033[0m", end="")
         if not raw:
             return None, None
         if raw.lower() == "back":
@@ -1731,7 +2095,8 @@ def select_country():
             continue
 
         while True:
-            raw_num = input("\nEnter the number of your choice (or press Enter to search again): ").strip()
+            raw_num = input(f"\n\033[1mEnter the number of your choice (or press Enter to search again):\033[0m {_ANSWER_COLOR}").strip()
+            print("\033[0m", end="")
             if not raw_num:
                 break
             try:
@@ -1860,15 +2225,15 @@ def _print_customer_block(c):
     """Render a styled customer profile block matching the confirmation summary style."""
     purchases_label = str(c['count'])
     phone_display = format_phone_display(c["country_code"], c["phone"], country=c["country"])
-    contact_rows = [f"  {'Phone:':<18}{phone_display}"]
+    contact_rows = [f"  \033[1m{'Phone:':<18}\033[0m{phone_display}"]
     if c["email"]:
-        contact_rows.append(f"  {'Email:':<18}{c['email']}")
-    location_rows = [f"  {'City:':<18}{c['city']}"]
+        contact_rows.append(f"  \033[1m{'Email:':<18}\033[0m{c['email']}")
+    location_rows = [f"  \033[1m{'City:':<18}\033[0m{c['city']}"]
     if c["state"]:
-        location_rows.append(f"  {'State / Region:':<18}{c['state']}")
-    location_rows.append(f"  {'Country:':<18}{c['country']}")
+        location_rows.append(f"  \033[1m{'State / Region:':<18}\033[0m{c['state']}")
+    location_rows.append(f"  \033[1m{'Country:':<18}\033[0m{c['country']}")
     _print_boxed("CUSTOMER PROFILE", [
-        ("CUSTOMER", [f"  {'Name:':<18}{c['name']}", f"  {'Purchases:':<18}{purchases_label}"]),
+        ("CUSTOMER", [f"  \033[1m{'Name:':<18}\033[0m{c['name']}", f"  \033[1m{'Purchases:':<18}\033[0m{purchases_label}"]),
         ("CONTACT", contact_rows),
         ("LOCATION", location_rows),
     ])
@@ -1899,10 +2264,12 @@ def search_and_select_customer(raw_rows, allow_new=True):
         "customer-location": "#777777",
         "register-option":   "#5fafff",
         "back-option":       "#777777",
+        "qmark":             "fg:default bold",
     })
 
     while True:
-        query = input("\nCustomer search (or press Enter to see all): ").strip()
+        query = input(f"\n\033[1mCustomer search (or press Enter to see all):\033[0m {_ANSWER_COLOR}").strip()
+        print("\033[0m", end="")
         if _looks_like_phone_query(query):
             _warn("Customer names cannot be numbers. Please enter a name or press Enter to see all customers.")
             continue
@@ -1911,7 +2278,6 @@ def search_and_select_customer(raw_rows, allow_new=True):
 
         if not filtered:
             _warn(f"No existing record found for '{query}'.")
-            print()
             _no_match_choices = []
             if allow_new:
                 _no_match_choices.append(
@@ -1929,6 +2295,19 @@ def search_and_select_customer(raw_rows, allow_new=True):
                 instruction=" ",
                 style=_STYLE,
             ).unsafe_ask()
+            # questionary's confirmed-answer line is built as
+            # " {} ".format(message) + answer -- with qmark="" and message=""
+            # (the only empty-message select() in this file) that leaves two
+            # bare leading spaces before the answer text. Overwritten here the
+            # same way the matched-customer confirmed line already is, just
+            # below in this same function.
+            _no_match_labels = {
+                "__NEW__": "+ Register as a new customer",
+                "__SEARCH__": "↩ Search again",
+                "Return to Main Menu": "← Return to Main Menu",
+            }
+            if action in _no_match_labels:
+                print(f"\033[1A\033[2K\033[1;38;5;214m{_no_match_labels[action]}\033[0m")
             if action == "__NEW__":
                 return ("__NEW__", query)
             if action is None or action == "Return to Main Menu":
@@ -1957,9 +2336,9 @@ def search_and_select_customer(raw_rows, allow_new=True):
 
         print()
         selected = questionary.select(
-            "Select customer:",
+            "",
             choices=choices,
-            qmark="",
+            qmark="Select customer:",
             instruction=" ",
             style=_STYLE,
         ).unsafe_ask()
@@ -2129,11 +2508,11 @@ def update_customer_details_if_needed(customer, raw_rows):
         field picker again, not exit)."""
         _stop_choice = "Done — review changes" if has_changes else "Cancel — no changes"
         field = questionary.select(
-            "Which field would you like to update?",
+            "",
             choices=["Name", "Phone", "Email", "City", "State / Region", "Country",
                      questionary.Separator(" "),
                      _back_choice(_stop_choice)],
-            qmark="",
+            qmark="Which field would you like to update?",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
@@ -2193,14 +2572,14 @@ def update_customer_details_if_needed(customer, raw_rows):
         print()
 
         action = questionary.select(
-            "Apply these changes?",
+            "",
             choices=[
                 "Confirm and apply changes",
                 "Edit more fields",
                 questionary.Separator(" "),
                 _back_choice("Discard changes & continue"),
             ],
-            qmark="",
+            qmark="Apply these changes?",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
@@ -2329,9 +2708,36 @@ def enter_new_customer(prefill_name="", raw_rows=None):
     # Name + Country — outer loop: pressing Enter in country search returns here
     while True:
         if prefill_name:
-            print(f"\nCustomer Name [{prefill_name}] (press Enter to accept or type to change):")
-            raw = " ".join(input("> ").split())
-            name = raw if raw else " ".join(prefill_name.split())
+            from prompt_toolkit.shortcuts import prompt as _pt_prompt
+            from prompt_toolkit.key_binding import KeyBindings
+            from prompt_toolkit.keys import Keys
+
+            # The prefilled name sits in the buffer as real, editable default
+            # text (not just a printed hint) so Enter alone accepts it. The
+            # first printable character typed clears the whole buffer before
+            # inserting itself, so editing never means appending onto the
+            # prefill -- typing always starts a fresh answer. Backspace/
+            # Delete/arrows are left on the default bindings, so the prefill
+            # can still be edited in place rather than only replaced outright.
+            _pristine = {"value": True}
+            _kb = KeyBindings()
+
+            @_kb.add(Keys.Any)
+            def _(event, _pristine=_pristine):
+                buf = event.app.current_buffer
+                if _pristine["value"]:
+                    _pristine["value"] = False
+                    buf.text = ""
+                    buf.cursor_position = 0
+                buf.insert_text(event.data)
+
+            raw = _pt_prompt(
+                [("class:label", "\nCustomer Name (press Enter to accept or type to change): ")],
+                default=prefill_name,
+                key_bindings=_kb,
+                style=_LONG_TEXT_ANSWER_STYLE,
+            )
+            name = " ".join(raw.split())
             prefill_name = ""  # only show prefill once
         else:
             name = ask_text("Customer Name:", blank_message="This field cannot be left blank. Please enter a name.")
@@ -2405,7 +2811,8 @@ def enter_new_customer(prefill_name="", raw_rows=None):
                             picked = None
                             while picked is None:
                                 try:
-                                    idx = int(input("\nEnter the number of your choice: ").strip()) - 1
+                                    idx = int(input(f"\n\033[1mEnter the number of your choice:\033[0m {_ANSWER_COLOR}").strip()) - 1
+                                    print("\033[0m", end="")
                                     if 0 <= idx < len(matches):
                                         picked = matches[idx]
                                     else:
@@ -2479,29 +2886,29 @@ def enter_new_customer(prefill_name="", raw_rows=None):
 
     # Review + edit loop
     while True:
-        _contact_rows = [f"  {'Phone:':<18}{format_phone_display(dial_code, phone, country=country_name)}"]
+        _contact_rows = [f"  \033[1m{'Phone:':<18}\033[0m{format_phone_display(dial_code, phone, country=country_name)}"]
         if email:
-            _contact_rows.append(f"  {'Email:':<18}{email}")
-        _location_rows = [f"  {'City:':<18}{city}"]
+            _contact_rows.append(f"  \033[1m{'Email:':<18}\033[0m{email}")
+        _location_rows = [f"  \033[1m{'City:':<18}\033[0m{city}"]
         if state:
-            _location_rows.append(f"  {'State / Region:':<18}{state}")
-        _location_rows.append(f"  {'Country:':<18}{country_name}")
+            _location_rows.append(f"  \033[1m{'State / Region:':<18}\033[0m{state}")
+        _location_rows.append(f"  \033[1m{'Country:':<18}\033[0m{country_name}")
         _print_boxed(None, [
-            ("CUSTOMER", [f"  {'Name:':<18}{name}"]),
+            ("CUSTOMER", [f"  \033[1m{'Name:':<18}\033[0m{name}"]),
             ("CONTACT", _contact_rows),
             ("LOCATION", _location_rows),
         ])
         print()
 
         action = questionary.select(
-            "Apply these changes?",
+            "",
             choices=[
                 "Confirm and apply changes",
                 "Edit a field",
                 questionary.Separator(" "),
                 _back_choice("Discard changes & continue"),
             ],
-            qmark="",
+            qmark="Apply these changes?",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
@@ -2525,11 +2932,11 @@ def enter_new_customer(prefill_name="", raw_rows=None):
         # Edit a field — questionary arrow-key selection, re-displays block on return
         print()
         field = questionary.select(
-            "Which field would you like to edit?",
+            "",
             choices=["Name", "Phone", "Email", "City", "State / Region", "Country",
                      questionary.Separator(" "),
                      _back_choice("Cancel — no changes")],
-            qmark="",
+            qmark="Which field would you like to edit?",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
@@ -2724,7 +3131,8 @@ def add_new_inventory():
     print("\n--- \033[1;38;5;124mADD NEW INVENTORY\033[0m ---")
 
     while True:
-        raw = input("\nHow many units are you adding? (press Enter for 1): ").strip()
+        raw = input(f"\n\033[1mHow many units are you adding? (press Enter for 1):\033[0m {_ANSWER_COLOR}").strip()
+        print("\033[0m", end="")
         if not raw:
             batch_size = 1
             break
@@ -2750,7 +3158,7 @@ def _add_single_unit():
     weave_type, category_code = select_or_add_weave_type()
     if weave_type is None:
         return
-    print(f"\nWeave Type: {weave_type}  |  Category Code: {category_code}")
+    print(f"\n\033[1mWeave Type:\033[0m {weave_type}  |  \033[1mCategory Code:\033[0m {category_code}")
 
     # Step 2: SKU resolution (Unassigned check first)
     sku, existing_row = resolve_sku(category_code, weave_type)
@@ -2766,7 +3174,8 @@ def _add_single_unit():
 
     base_price = ask_number("Base Price + GST Tax (INR):", allow_zero=False)
     while True:
-        raw = input("\nShipping Cost (INR) [default: 750]: ").strip()
+        raw = input(f"\n\033[1mShipping Cost (INR) [default: 750]:\033[0m {_ANSWER_COLOR}").strip()
+        print("\033[0m", end="")
         if not raw:
             shipping = 750.0
             break
@@ -2779,7 +3188,8 @@ def _add_single_unit():
         except ValueError:
             _warn("Please enter a valid number (e.g. 750 or 0).")
     while True:
-        raw = input("\nDetailing Cost (INR) (press Enter if none): ").strip()
+        raw = input(f"\n\033[1mDetailing Cost (INR) (press Enter if none):\033[0m {_ANSWER_COLOR}").strip()
+        print("\033[0m", end="")
         if not raw:
             design = 0.0
             break
@@ -2792,7 +3202,7 @@ def _add_single_unit():
         except ValueError:
             _warn("Please enter a valid number (e.g. 500 or 0).")
     total_cost_inr = round(base_price + shipping + design, 2)
-    print(f"\nTotal Cost (INR): {total_cost_inr:,.2f}")
+    print(f"\n\033[1mTotal Cost (INR):\033[0m {total_cost_inr:,.2f}")
 
     # Step 4: ECB rate — loop until confirmed; date_acquired_str always holds user-entered date
     while True:
@@ -2813,21 +3223,21 @@ def _add_single_unit():
     _sep = f"\033[2m{'—' * 50}\033[0m"
     print(f"\n\033[38;5;202mCOST BASIS\033[0m")
     print(_sep)
-    print(f"  {'Total Cost:':<14}${total_cost_usd:,.2f}")
+    print(f"  \033[1m{'Total Cost:':<14}\033[0m${total_cost_usd:,.2f}")
     print(_sep)
 
     # Step 5: Pricing path (loops until valid margin or explicit cancel)
     while True:
         print()
         path_choice = questionary.select(
-            "How would you like to set the selling price?",
+            "",
             choices=[
                 "Enter a markup percentage",
                 "Enter a selling price (USD)",
                 questionary.Separator(" "),
                 _back_choice("Discard & exit"),
             ],
-            qmark="",
+            qmark="How would you like to set the selling price?",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
@@ -2843,21 +3253,21 @@ def _add_single_unit():
 
         pricing = calculate_pricing(total_cost_inr, ecb_rate, pricing_path, pricing_value)
 
-        _mc      = get_margin_color(pricing['margin_pct'])
+        _mc      = get_margin_color(pricing['margin_pct'], weave_type)
         _muc     = get_markup_color(pricing['markup_pct'])
         _gp_sign = signed(pricing['gross_profit_usd'])
         _gpc     = "\033[92m" if pricing['gross_profit_usd'] >= 0 else "\033[91m"
         print(f"\n\033[38;5;202mPRICING PREVIEW\033[0m")
         print(_sep)
-        print(f"  {'Total Cost:':<16}${pricing['total_cost_usd']:,.2f}")
+        print(f"  \033[1m{'Total Cost:':<16}\033[0m${pricing['total_cost_usd']:,.2f}")
         print()
-        print(f"  {'Selling Price:':<16}${pricing['selling_price_usd']:,.2f}")
-        print(f"  {'Markup %:':<16}{_muc}{pricing['markup_pct']:.1f}%\033[0m")
-        print(f"  {'Gross Profit:':<16}{_gpc}{_gp_sign}${abs(pricing['gross_profit_usd']):,.2f}\033[0m")
-        print(f"  {'Margin %:':<16}{_mc}{pricing['margin_pct']:.1f}%\033[0m")
+        print(f"  \033[1m{'Selling Price:':<16}\033[0m${pricing['selling_price_usd']:,.2f}")
+        print(f"  \033[1m{'Markup %:':<16}\033[0m{_muc}{pricing['markup_pct']:.1f}%\033[0m")
+        print(f"  \033[1m{'Gross Profit:':<16}\033[0m{_gpc}{_gp_sign}${abs(pricing['gross_profit_usd']):,.2f}\033[0m")
+        print(f"  \033[1m{'Margin %:':<16}\033[0m{_mc}{pricing['margin_pct']:.1f}%\033[0m")
         print(_sep)
 
-        proceed, warned = check_pricing_warnings(pricing["margin_pct"], pricing["markup_pct"], pricing["gross_profit_usd"])
+        proceed, warned = check_pricing_warnings(pricing["margin_pct"], pricing["markup_pct"], weave_type, pricing["gross_profit_usd"])
         if proceed is None:
             print("\nAdd cancelled. Returning to Main Menu.")
             return
@@ -2879,37 +3289,37 @@ def _add_single_unit():
 
     # Step 10: Confirmation summary
     _gp_sign = signed(pricing['gross_profit_usd'])
-    _mc  = get_margin_color(pricing['margin_pct'])
+    _mc  = get_margin_color(pricing['margin_pct'], weave_type)
     _muc = get_markup_color(pricing['markup_pct'])
     _gpc = "\033[92m" if pricing['gross_profit_usd'] >= 0 else "\033[91m"
 
-    _notes_rows = [f"  {line}" for line in full_inventory_notes.split("\n")] if full_inventory_notes else []
-    _print_boxed("ADD SUMMARY", [
+    _notes_rows = _notes_section_rows(*full_inventory_notes.split("\n"))
+    _print_boxed("UNIT INTAKE SUMMARY", [
         ("UNIT", [
-            f"  {'SKU:':<22}{sku}",
-            f"  {'Category Code:':<22}{category_code}",
-            f"  {'Weave Type:':<22}{weave_type}",
-            f"  {'Source Sheet + Tab:':<22}{source_sheet}",
-            f"  {'Supplier:':<22}{supplier}",
-            f"  {'Date Acquired:':<22}{date_acquired_str}",
+            f"  \033[1m{'SKU:':<22}\033[0m{sku}",
+            f"  \033[1m{'Category Code:':<22}\033[0m{category_code}",
+            f"  \033[1m{'Weave Type:':<22}\033[0m{weave_type}",
+            f"  \033[1m{'Source Sheet + Tab:':<22}\033[0m{source_sheet}",
+            f"  \033[1m{'Supplier:':<22}\033[0m{supplier}",
+            f"  \033[1m{'Date Acquired:':<22}\033[0m{date_acquired_str}",
         ]),
         ("COST", [
-            f"  {'Base + GST (INR):':<22}{base_price:,.2f}",
-            f"  {'Shipping (INR):':<22}{shipping:,.2f}",
-            f"  {'Detailing Cost (INR):':<22}{design:,.2f}",
-            f"  {'Total Cost (INR):':<22}{total_cost_inr:,.2f}",
-            f"  {'Total Cost (USD):':<22}${pricing['total_cost_usd']:,.2f}",
+            f"  \033[1m{'Base + GST (INR):':<22}\033[0m{base_price:,.2f}",
+            f"  \033[1m{'Shipping (INR):':<22}\033[0m{shipping:,.2f}",
+            f"  \033[1m{'Detailing Cost (INR):':<22}\033[0m{design:,.2f}",
+            f"  \033[1m{'Total Cost (INR):':<22}\033[0m{total_cost_inr:,.2f}",
+            f"  \033[1m{'Total Cost (USD):':<22}\033[0m${pricing['total_cost_usd']:,.2f}",
         ]),
         ("PRICING", [
-            f"  {'Selling Price (USD):':<22}${pricing['selling_price_usd']:,.2f}",
-            f"  {'Selling Price (INR):':<22}{pricing['selling_price_inr_derived']:,.2f}",
-            f"  {'Markup %:':<22}{_muc}{pricing['markup_pct']:.1f}%\033[0m",
-            f"  {'Gross Profit (USD):':<22}{_gpc}{_gp_sign}${abs(pricing['gross_profit_usd']):,.2f}\033[0m",
-            f"  {'Margin %:':<22}{_mc}{pricing['margin_pct']:.1f}%\033[0m",
+            f"  \033[1m{'Selling Price (USD):':<22}\033[0m${pricing['selling_price_usd']:,.2f}",
+            f"  \033[1m{'Selling Price (INR):':<22}\033[0m{pricing['selling_price_inr_derived']:,.2f}",
+            f"  \033[1m{'Markup %:':<22}\033[0m{_muc}{pricing['markup_pct']:.1f}%\033[0m",
+            f"  \033[1m{'Gross Profit (USD):':<22}\033[0m{_gpc}{_gp_sign}${abs(pricing['gross_profit_usd']):,.2f}\033[0m",
+            f"  \033[1m{'Margin %:':<22}\033[0m{_mc}{pricing['margin_pct']:.1f}%\033[0m",
         ]),
         ("STATUS", [
-            f"  {'Days in Inventory:':<22}{days_in_inventory}",
-            f"  {'Status:':<22}Available",
+            f"  \033[1m{'Days in Inventory:':<22}\033[0m{days_in_inventory}",
+            f"  \033[1m{'Status:':<22}\033[0mAvailable",
         ]),
         ("NOTES", _notes_rows),
     ])
@@ -2941,7 +3351,7 @@ def _add_single_unit():
         "Markup %": round(pricing["markup_pct"] / 100, 6),
         "(Profit) Margin %": round(pricing["margin_pct"] / 100, 6),
         "Status": "Available",
-        "Inventory Notes": full_inventory_notes,
+        "Inventory Notes": _normalize_inventory_notes(full_inventory_notes),
         "Transaction Notes": "",
     }
 
@@ -2956,7 +3366,7 @@ def _add_single_unit():
         # missing it.
         if not _status_unchanged(existing_row, "Unassigned"):
             _warn("This unit's status has changed since you started (no longer 'Unassigned'). "
-                  "Someone else may have just claimed it — nothing was written. Please re-check the SKU.")
+                  "Another user may have just claimed it — nothing was written. Please re-check the SKU.")
             return
         update_row(existing_row, row_data)
     else:
@@ -3023,24 +3433,36 @@ def _add_bulk_units(batch_size):
     _eq  = "=" * 50
 
     units = []
+    # SKUs already resolved by earlier units in this batch -- passed into
+    # resolve_sku() below so a later unit of the same weave type is never
+    # shown/confirmed the same SKU an earlier unit in this same batch just
+    # claimed. Nothing in this batch is written to the sheet until the
+    # final confirmation, so resolve_sku() has no other way to see them.
+    # Discarded (not just left reserved) whenever a unit is skipped/declined
+    # below, so that unit's SKU goes back up for grabs for the next unit
+    # instead of being permanently burned.
+    batch_reserved_skus = set()
     for i in range(1, batch_size + 1):
         print(f"\n--- UNIT INTAKE ({i} of {batch_size}) ---")
+        print()
 
         weave_type, category_code = select_or_add_weave_type()
         if weave_type is None:
             print(f"\nUnit {i} skipped — no data will be recorded for this unit.")
             continue
         garment_type = WEAVE_GARMENT_TYPES.get(weave_type, "Saree")
-        print(f"\nWeave Type: {weave_type}  |  Category Code: {category_code}")
+        print(f"\n\033[1mWeave Type:\033[0m {weave_type}  |  \033[1mCategory Code:\033[0m {category_code}")
 
-        sku, existing_row = resolve_sku(category_code, weave_type)
+        sku, existing_row = resolve_sku(category_code, weave_type, batch_reserved_skus)
         if sku is None:
             print(f"\nUnit {i} skipped — no data will be recorded for this unit.")
             continue
+        batch_reserved_skus.add(sku)
 
         base_price = ask_number("Base Price + GST Tax (INR):", allow_zero=False)
         while True:
-            raw = input("\nShipping Cost (INR) [default: 750]: ").strip()
+            raw = input(f"\n\033[1mShipping Cost (INR) [default: 750]:\033[0m {_ANSWER_COLOR}").strip()
+            print("\033[0m", end="")
             if not raw:
                 shipping = 750.0
                 break
@@ -3053,7 +3475,8 @@ def _add_bulk_units(batch_size):
             except ValueError:
                 _warn("Please enter a valid number (e.g. 750 or 0).")
         while True:
-            raw = input("\nDetailing Cost (INR) (press Enter if none): ").strip()
+            raw = input(f"\n\033[1mDetailing Cost (INR) (press Enter if none):\033[0m {_ANSWER_COLOR}").strip()
+            print("\033[0m", end="")
             if not raw:
                 design = 0.0
                 break
@@ -3069,7 +3492,7 @@ def _add_bulk_units(batch_size):
         total_cost_usd_preview = round(total_cost_inr / ecb_rate, 2)
         print(f"\n\033[38;5;202mCOST BASIS\033[0m")
         print(_sep)
-        print(f"  {'Total Cost:':<14}${total_cost_usd_preview:,.2f}")
+        print(f"  \033[1m{'Total Cost:':<14}\033[0m${total_cost_usd_preview:,.2f}")
         print(_sep)
 
         skipped = False
@@ -3077,14 +3500,14 @@ def _add_bulk_units(batch_size):
         while True:
             print()
             path_choice = questionary.select(
-                "How would you like to set the selling price?",
+                "",
                 choices=[
                     "Enter a markup percentage",
                     "Enter a selling price (USD)",
                     questionary.Separator(" "),
                     _back_choice("Skip this unit"),
                 ],
-                qmark="",
+                qmark="How would you like to set the selling price?",
                 instruction=" ",
                 style=_MENU_STYLE,
             ).unsafe_ask()
@@ -3100,22 +3523,22 @@ def _add_bulk_units(batch_size):
 
             pricing = calculate_pricing(total_cost_inr, ecb_rate, pricing_path, pricing_value)
 
-            _mc      = get_margin_color(pricing['margin_pct'])
+            _mc      = get_margin_color(pricing['margin_pct'], weave_type)
             _muc     = get_markup_color(pricing['markup_pct'])
             _gp_sign = signed(pricing['gross_profit_usd'])
             _gpc     = "\033[92m" if pricing['gross_profit_usd'] >= 0 else "\033[91m"
             print(f"\n\033[38;5;202mPRICING PREVIEW\033[0m")
             print(_sep)
-            print(f"  {'Total Cost:':<16}${pricing['total_cost_usd']:,.2f}")
+            print(f"  \033[1m{'Total Cost:':<16}\033[0m${pricing['total_cost_usd']:,.2f}")
             print()
-            print(f"  {'Selling Price:':<16}${pricing['selling_price_usd']:,.2f}")
-            print(f"  {'Markup %:':<16}{_muc}{pricing['markup_pct']:.1f}%\033[0m")
-            print(f"  {'Gross Profit:':<16}{_gpc}{_gp_sign}${abs(pricing['gross_profit_usd']):,.2f}\033[0m")
-            print(f"  {'Margin %:':<16}{_mc}{pricing['margin_pct']:.1f}%\033[0m")
+            print(f"  \033[1m{'Selling Price:':<16}\033[0m${pricing['selling_price_usd']:,.2f}")
+            print(f"  \033[1m{'Markup %:':<16}\033[0m{_muc}{pricing['markup_pct']:.1f}%\033[0m")
+            print(f"  \033[1m{'Gross Profit:':<16}\033[0m{_gpc}{_gp_sign}${abs(pricing['gross_profit_usd']):,.2f}\033[0m")
+            print(f"  \033[1m{'Margin %:':<16}\033[0m{_mc}{pricing['margin_pct']:.1f}%\033[0m")
             print(_sep)
 
             proceed, warned = check_pricing_warnings(
-                pricing["margin_pct"], pricing["markup_pct"], pricing["gross_profit_usd"],
+                pricing["margin_pct"], pricing["markup_pct"], weave_type, pricing["gross_profit_usd"],
                 exit_label="Skip this unit",
             )
             if proceed is None:
@@ -3125,6 +3548,7 @@ def _add_bulk_units(batch_size):
                 break
 
         if skipped:
+            batch_reserved_skus.discard(sku)
             print(f"\nUnit {i} skipped — no data will be recorded for this unit.")
             continue
 
@@ -3138,43 +3562,44 @@ def _add_bulk_units(batch_size):
         days_in_inventory = (date.today() - date_acquired).days
 
         _gp_sign = signed(pricing['gross_profit_usd'])
-        _mc  = get_margin_color(pricing['margin_pct'])
+        _mc  = get_margin_color(pricing['margin_pct'], weave_type)
         _muc = get_markup_color(pricing['markup_pct'])
         _gpc = "\033[92m" if pricing['gross_profit_usd'] >= 0 else "\033[91m"
 
-        _notes_rows = [f"  {line}" for line in full_inventory_notes.split("\n")] if full_inventory_notes else []
-        _print_boxed("ADD SUMMARY", [
+        _notes_rows = _notes_section_rows(*full_inventory_notes.split("\n"))
+        _print_boxed("UNIT INTAKE SUMMARY", [
             ("UNIT", [
-                f"  {'SKU:':<22}{sku}",
-                f"  {'Category Code:':<22}{category_code}",
-                f"  {'Weave Type:':<22}{weave_type}",
-                f"  {'Source Sheet + Tab:':<22}{source_sheet}",
-                f"  {'Supplier:':<22}{supplier}",
-                f"  {'Date Acquired:':<22}{date_acquired_str}",
+                f"  \033[1m{'SKU:':<22}\033[0m{sku}",
+                f"  \033[1m{'Category Code:':<22}\033[0m{category_code}",
+                f"  \033[1m{'Weave Type:':<22}\033[0m{weave_type}",
+                f"  \033[1m{'Source Sheet + Tab:':<22}\033[0m{source_sheet}",
+                f"  \033[1m{'Supplier:':<22}\033[0m{supplier}",
+                f"  \033[1m{'Date Acquired:':<22}\033[0m{date_acquired_str}",
             ]),
             ("COST", [
-                f"  {'Base + GST (INR):':<22}{base_price:,.2f}",
-                f"  {'Shipping (INR):':<22}{shipping:,.2f}",
-                f"  {'Detailing Cost (INR):':<22}{design:,.2f}",
-                f"  {'Total Cost (INR):':<22}{total_cost_inr:,.2f}",
-                f"  {'Total Cost (USD):':<22}${pricing['total_cost_usd']:,.2f}",
+                f"  \033[1m{'Base + GST (INR):':<22}\033[0m{base_price:,.2f}",
+                f"  \033[1m{'Shipping (INR):':<22}\033[0m{shipping:,.2f}",
+                f"  \033[1m{'Detailing Cost (INR):':<22}\033[0m{design:,.2f}",
+                f"  \033[1m{'Total Cost (INR):':<22}\033[0m{total_cost_inr:,.2f}",
+                f"  \033[1m{'Total Cost (USD):':<22}\033[0m${pricing['total_cost_usd']:,.2f}",
             ]),
             ("PRICING", [
-                f"  {'Selling Price (USD):':<22}${pricing['selling_price_usd']:,.2f}",
-                f"  {'Selling Price (INR):':<22}{pricing['selling_price_inr_derived']:,.2f}",
-                f"  {'Markup %:':<22}{_muc}{pricing['markup_pct']:.1f}%\033[0m",
-                f"  {'Gross Profit (USD):':<22}{_gpc}{_gp_sign}${abs(pricing['gross_profit_usd']):,.2f}\033[0m",
-                f"  {'Margin %:':<22}{_mc}{pricing['margin_pct']:.1f}%\033[0m",
+                f"  \033[1m{'Selling Price (USD):':<22}\033[0m${pricing['selling_price_usd']:,.2f}",
+                f"  \033[1m{'Selling Price (INR):':<22}\033[0m{pricing['selling_price_inr_derived']:,.2f}",
+                f"  \033[1m{'Markup %:':<22}\033[0m{_muc}{pricing['markup_pct']:.1f}%\033[0m",
+                f"  \033[1m{'Gross Profit (USD):':<22}\033[0m{_gpc}{_gp_sign}${abs(pricing['gross_profit_usd']):,.2f}\033[0m",
+                f"  \033[1m{'Margin %:':<22}\033[0m{_mc}{pricing['margin_pct']:.1f}%\033[0m",
             ]),
             ("STATUS", [
-                f"  {'Days in Inventory:':<22}{days_in_inventory}",
-                f"  {'Status:':<22}Available",
+                f"  \033[1m{'Days in Inventory:':<22}\033[0m{days_in_inventory}",
+                f"  \033[1m{'Status:':<22}\033[0mAvailable",
             ]),
             ("NOTES", _notes_rows),
         ])
 
         confirmed = ask_yes_no("Add this unit to the batch?")
         if not confirmed:
+            batch_reserved_skus.discard(sku)
             print(f"\nUnit {i} skipped — no data will be recorded for this unit.")
             continue
 
@@ -3199,7 +3624,7 @@ def _add_bulk_units(batch_size):
             "Markup %": round(pricing["markup_pct"] / 100, 6),
             "(Profit) Margin %": round(pricing["margin_pct"] / 100, 6),
             "Status": "Available",
-            "Inventory Notes": full_inventory_notes,
+            "Inventory Notes": _normalize_inventory_notes(full_inventory_notes),
             "Transaction Notes": "",
         }
 
@@ -3229,28 +3654,32 @@ def _add_bulk_units(batch_size):
     # column) surfaces a mixed-category batch more clearly than a repeated
     # column value would, without adding a column for something that isn't
     # actually a sheet field.
-    print(f"\n--- BULK INTAKE SUMMARY ({len(units)} unit{'s' if len(units) != 1 else ''}) ---")
     groups = {}
     for u in units:
         groups.setdefault(u["garment_type"], []).append(u)
 
+    _summary_sections = []
     for garment_type in sorted(groups.keys()):
-        print(f"\n\033[38;5;202m{garment_type.upper()}\033[0m")
-        print(f"  {'SKU':<16}{'Weave Type':<24}{'Total Cost':<13}{'Selling Price':<15}{'Markup':<9}{'Gross Profit':<15}Margin")
+        _rows = [f"  {'SKU':<16}{'Weave Type':<24}{'Total Cost':<13}{'Selling Price':<15}{'Markup':<9}{'Gross Profit':<15}Margin"]
         for u in groups[garment_type]:
             cost_str   = f"${u['total_cost_usd']:,.2f}"
             price_str  = f"${u['selling_price_usd']:,.2f}"
             markup_str = f"{u['markup_pct']:.1f}%"
             gp_str     = f"${u['gross_profit_usd']:,.2f}"
             margin_str = f"{u['margin_pct']:.1f}%"
-            print(
+            _rows.append(
                 f"  {u['sku']:<16}{u['weave_type']:<24}"
                 f"{cost_str:<13}{price_str:<15}{markup_str:<9}{gp_str:<15}{margin_str}"
             )
+        _summary_sections.append((garment_type.upper(), _rows))
 
-    print(f"\n  Supplier: {supplier}")
-    print(f"  Date Acquired: {date_acquired_str}")
-    print(f"  Source Sheet + Tab: {source_sheet}")
+    _summary_sections.append(("BATCH DETAILS", [
+        f"  \033[1m{'Supplier:':<22}\033[0m{supplier}",
+        f"  \033[1m{'Date Acquired:':<22}\033[0m{date_acquired_str}",
+        f"  \033[1m{'Source Sheet + Tab:':<22}\033[0m{source_sheet}",
+    ]))
+
+    _print_boxed(f"BULK INTAKE SUMMARY ({len(units)} unit{'s' if len(units) != 1 else ''})", _summary_sections)
 
     confirmed = ask_yes_no(f"\nWrite all {len(units)} unit{'s' if len(units) != 1 else ''} to the master sheet?")
     if not confirmed:
@@ -3262,11 +3691,13 @@ def _add_bulk_units(batch_size):
     # since even a few units' worth of time is enough for another session
     # to have changed something between when this unit was gathered and
     # when it's actually written.
-    # Tracks SKUs this batch has already written to the sheet, so a collision
-    # against one of THIS batch's own earlier units (routine when a batch has
-    # multiple units of the same weave type -- generate_next_sku() has no
-    # visibility into still-uncommitted batch units) can be told apart from a
-    # genuine collision against another session's write.
+    # Tracks SKUs this batch has already written to the sheet. Entry-time
+    # resolution (batch_reserved_skus, above) already keeps two units in
+    # this batch from being confirmed the same SKU in the first place, so
+    # a collision here should be rare -- this set exists to tell that
+    # residual edge case apart from a genuine collision against another
+    # session's write, and to keep a reassignment fallback from colliding
+    # with another SKU this same loop already wrote.
     skus_written_this_batch = set()
     succeeded, skipped_at_write, failed_sku, failed_err, not_attempted = [], [], None, None, []
     for idx, u in enumerate(units):
@@ -3284,7 +3715,7 @@ def _add_bulk_units(batch_size):
             else:
                 sku = u["sku"]
                 if find_row_index_by_sku(sku) is not None:
-                    new_sku = generate_next_sku(u["category_code"], get_raw_rows())
+                    new_sku = generate_next_sku(u["category_code"], get_raw_rows(), exclude_skus=skus_written_this_batch)
                     if sku in skus_written_this_batch:
                         _warn(f"{sku} was already used earlier in this batch (same weave type). Reassigning this unit to {new_sku}.")
                     else:
@@ -3309,18 +3740,20 @@ def _add_bulk_units(batch_size):
 
 def ask_payment_method():
     method = questionary.select(
-        "Method of Payment:",
+        "",
         choices=["Cash", "Digital Transfer (CashApp, PayPal, Venmo, Zelle)", "Point-of-Sale (POS)"],
-        qmark="",
+        qmark="Method of Payment:",
         instruction=" ",
+        style=_MENU_STYLE,
     ).unsafe_ask()
     if method == "Digital Transfer (CashApp, PayPal, Venmo, Zelle)":
         print()
         method = questionary.select(
-            "Digital transfer method:",
+            "",
             choices=["Zelle", "Venmo", "PayPal", "CashApp"],
-            qmark="",
+            qmark="Digital transfer method:",
             instruction=" ",
+            style=_MENU_STYLE,
         ).unsafe_ask()
     return method
 
@@ -3367,35 +3800,34 @@ def record_sale():
         selling_price_fmt = f"${_sheet_float(row.get('Selling Price (USD)', '')):,.2f}"
 
         _unit_rows = [
-            f"  {'SKU:':<18}{row['SKU']}",
-            f"  {'Weave Type:':<18}{row['Weave Type / Cluster']}",
-            f"  {'Supplier:':<18}{row['Supplier']}",
-            f"  {'Date Acquired:':<18}{row['Date Acquired']}",
-            f"  {'Selling Price:':<18}{selling_price_fmt}",
+            f"  \033[1m{'SKU:':<18}\033[0m{row['SKU']}",
+            f"  \033[1m{'Weave Type:':<18}\033[0m{row['Weave Type / Cluster']}",
+            f"  \033[1m{'Supplier:':<18}\033[0m{row['Supplier']}",
+            f"  \033[1m{'Date Acquired:':<18}\033[0m{row['Date Acquired']}",
+            f"  \033[1m{'Selling Price:':<18}\033[0m{selling_price_fmt}",
         ]
         _sections = [("UNIT", _unit_rows)]
         if current_status == "Reserved":
             _rdate        = row.get("Reserved Date", "").strip()
             _reserver_cur = _get_reserver_name(row.get("Inventory Notes", "")) or "—"
             _res_rows = [
-                f"  {'Reserved By:':<18}{_reserver_cur}",
-                f"  {'Reserved Date:':<18}{_rdate}",
+                f"  \033[1m{'Reserved By:':<18}\033[0m{_reserver_cur}",
+                f"  \033[1m{'Reserved Date:':<18}\033[0m{_rdate}",
             ]
             if _rdate:
                 _days_res, _res_expired = _reservation_days(_rdate)
                 if _days_res is not None:
                     _dr_color = "\033[91m" if _res_expired else "\033[92m"
-                    _res_rows.append(f"  {'Days Reserved:':<18}{_dr_color}{_days_res} of 7\033[0m")
-            _res_rows.append(f"  {'Status:':<18}{_status_color}{current_status}\033[0m")
+                    _res_rows.append(f"  \033[1m{'Days Reserved:':<18}\033[0m{_dr_color}{_days_res} of 7\033[0m")
+            _res_rows.append(f"  \033[1m{'Status:':<18}\033[0m{_status_color}{current_status}\033[0m")
             _sections.append(("RESERVATION", _res_rows))
         else:
-            _sections.append(("STATUS", [f"  {'Status:':<18}{_status_color}{current_status}\033[0m"]))
+            _sections.append(("STATUS", [f"  \033[1m{'Status:':<18}\033[0m{_status_color}{current_status}\033[0m"]))
         _print_boxed("CURRENT RECORD", _sections)
         if _res_expired:
             _warn("Reservation has exceeded the 7-day maximum.")
         if ask_yes_no("Is this the correct unit?"):
             break
-        print()
 
     # Step 3: Sale details
     date_acquired = _safe_parse_date(row.get("Date Acquired", ""))
@@ -3410,10 +3842,11 @@ def record_sale():
 
     print()
     sales_channel = questionary.select(
-        "Sales Channel:",
+        "",
         choices=SALES_CHANNELS + [questionary.Separator(" "), _back_choice("Return to Main Menu")],
-        qmark="",
+        qmark="Sales Channel:",
         instruction=" ",
+        style=_MENU_STYLE,
     ).unsafe_ask()
     if sales_channel is None or sales_channel == "Return to Main Menu":
         print("\nSale cancelled. Returning to Main Menu.")
@@ -3487,8 +3920,10 @@ def record_sale():
                 print(f"\n\033[91m⚠  BELOW COST\033[0m")
                 print(f"\033[2m{'—' * 50}\033[0m")
                 print(f"{_pricing_desc} Gross Profit at ${gross_profit_usd:,.2f}. The unit will sell at a loss.")
-            elif margin_pct < 15:
-                print(f"\n{get_margin_color(margin_pct)}△ LOW MARGIN — Margin sits at {margin_pct:.1f}%, below the 15% threshold.\033[0m")
+            elif margin_pct < _margin_thresholds(row["Weave Type / Cluster"])[0]:
+                _flag_below = _margin_thresholds(row["Weave Type / Cluster"])[0]
+                print(f"\n{get_margin_color(margin_pct, row['Weave Type / Cluster'])}△ LOW MARGIN — "
+                      f"Margin sits at {margin_pct:.1f}%, below the {_flag_below}% threshold.\033[0m")
             else:
                 break
 
@@ -3499,9 +3934,9 @@ def record_sale():
                 _choices.append("Remove discount and proceed at full price")
             _choices += [_proceed_label, questionary.Separator(" "), _back_choice("Discard & exit")]
             alert_choice = questionary.select(
-                "How would you like to proceed?",
+                "",
                 choices=_choices,
-                qmark="",
+                qmark="How would you like to proceed?",
                 instruction=" ",
                 style=_MENU_STYLE,
             ).unsafe_ask()
@@ -3527,10 +3962,11 @@ def record_sale():
         payment_choice = "Paid in full"
     else:
         payment_choice = questionary.select(
-            "Payment status:",
+            "",
             choices=["Paid in full", "Partial payment"],
-            qmark="",
+            qmark="Payment status:",
             instruction=" ",
+            style=_MENU_STYLE,
         ).unsafe_ask()
     if payment_choice == "Paid in full":
         amount_received = actual_selling_price_usd
@@ -3558,6 +3994,7 @@ def record_sale():
             new_status = "Sold - Partial Payment"
 
     # Step 7: Payment method
+    print()
     payment_method = ask_payment_method()
 
     # Step 8: Confirmation summary
@@ -3574,10 +4011,10 @@ def record_sale():
 
     _gp_label = "Original Margin:" if discount_pct else "Margin:"
     _pricing_rows = [
-        f"  {'Total Cost:':<22}${total_cost_usd:,.2f}",
-        f"  {'Selling Price:':<22}${selling_price_usd:,.2f}",
-        f"  {'Original Markup:':<22}{original_markup_pct:.1f}%",
-        f"  {_gp_label:<22}{get_margin_color(orig_margin_pct)}{orig_m_sign}{abs(orig_margin_pct):.1f}%\033[0m ({_orig_gpc}{orig_gp_sign}${abs(orig_gp_usd):,.2f}\033[0m)",
+        f"  \033[1m{'Total Cost:':<22}\033[0m${total_cost_usd:,.2f}",
+        f"  \033[1m{'Selling Price:':<22}\033[0m${selling_price_usd:,.2f}",
+        f"  \033[1m{'Original Markup:':<22}\033[0m{original_markup_pct:.1f}%",
+        f"  \033[1m{_gp_label:<22}\033[0m{get_margin_color(orig_margin_pct, row['Weave Type / Cluster'])}{orig_m_sign}{abs(orig_margin_pct):.1f}%\033[0m ({_orig_gpc}{orig_gp_sign}${abs(orig_gp_usd):,.2f}\033[0m)",
     ]
 
     if discount_pct:
@@ -3587,34 +4024,46 @@ def record_sale():
         else:
             discount_impact = f"Discounted ${discount_amount:,.2f}, lost ${abs(gross_profit_usd):,.2f} below cost"
         _pricing_rows.append("")
-        _pricing_rows.append(f"  {'Discount Applied:':<22}{discount_pct:.1f}% (-${discount_amount:,.2f})")
-        _pricing_rows.append(f"  {'Unit Sold For:':<22}${actual_selling_price_usd:,.2f}")
-        _pricing_rows.append(f"  {'Discount Impact:':<22}{discount_impact}")
-        _pricing_rows.append(f"  {'Discounted Margin:':<22}{get_margin_color(margin_pct)}{mar_sign}{abs(margin_pct):.1f}%\033[0m ({_disc_gpc}{gp_sign}${abs(gross_profit_usd):,.2f}\033[0m)")
+        _pricing_rows.append(f"  \033[1m{'Discount Applied:':<22}\033[0m{discount_pct:.1f}% (-${discount_amount:,.2f})")
+        _pricing_rows.append(f"  \033[1m{'Unit Sold For:':<22}\033[0m${actual_selling_price_usd:,.2f}")
+        _pricing_rows.append(f"  \033[1m{'Discount Impact:':<22}\033[0m{discount_impact}")
+        _pricing_rows.append(f"  \033[1m{'Discounted Margin:':<22}\033[0m{get_margin_color(margin_pct, row['Weave Type / Cluster'])}{mar_sign}{abs(margin_pct):.1f}%\033[0m ({_disc_gpc}{gp_sign}${abs(gross_profit_usd):,.2f}\033[0m)")
 
     _status_color = get_status_color(new_status)
     _payment_rows = [
-        f"  {'Status:':<22}{_status_color}{new_status}\033[0m",
-        f"  {'Payment Method:':<22}{payment_method}",
+        f"  \033[1m{'Status:':<22}\033[0m{_status_color}{new_status}\033[0m",
+        f"  \033[1m{'Payment Method:':<22}\033[0m{payment_method}",
     ]
     if payment_choice != "Paid in full":
-        _payment_rows.append(f"  {'Full Price:':<22}${actual_selling_price_usd:,.2f}")
-    _payment_rows.append(f"  {'Amount Received:':<22}${amount_received:,.2f}")
+        _payment_rows.append(f"  \033[1m{'Full Price:':<22}\033[0m${actual_selling_price_usd:,.2f}")
+    _payment_rows.append(f"  \033[1m{'Amount Received:':<22}\033[0m${amount_received:,.2f}")
     if payment_choice == "Paid in full":
-        _payment_rows.append(f"  {'Amount Outstanding:':<22}$0.00")
+        _payment_rows.append(f"  \033[1m{'Amount Outstanding:':<22}\033[0m$0.00")
     else:
-        _payment_rows.append(f"  {'Amount Outstanding:':<22}${amount_outstanding:,.2f}")
+        _payment_rows.append(f"  \033[1m{'Amount Outstanding:':<22}\033[0m${amount_outstanding:,.2f}")
+
+    # Computed here (rather than at write time) so the confirmation box can
+    # show the exact [MM-DD-YYYY · SALE] line that will be appended to
+    # Transaction Notes -- not a preview that drifts from what's actually saved.
+    if new_status == "Sold":
+        auto_note = f"[{date_sold_str} · SALE] Paid in full: ${amount_received:,.2f} received via {payment_method}."
+    else:
+        auto_note = (
+            f"[{date_sold_str} · SALE] Initial partial payment of ${round(amount_received, 2):,.2f} received via {payment_method}. "
+            f"${amount_outstanding:,.2f} outstanding."
+        )
 
     _print_boxed("SALE SUMMARY", [
         ("TRANSACTION", [
-            f"  {'SKU:':<22}{sku}",
-            f"  {'Date Sold:':<22}{date_sold_str}",
-            f"  {'Days to Sell:':<22}{days_to_sell}",
-            f"  {'Sales Channel:':<22}{sales_channel}",
-            f"  {'Customer:':<22}{customer_name}",
+            f"  \033[1m{'SKU:':<22}\033[0m{sku}",
+            f"  \033[1m{'Date Sold:':<22}\033[0m{date_sold_str}",
+            f"  \033[1m{'Days to Sell:':<22}\033[0m{days_to_sell}",
+            f"  \033[1m{'Sales Channel:':<22}\033[0m{sales_channel}",
+            f"  \033[1m{'Customer:':<22}\033[0m{customer_name}",
         ]),
         ("PRICING", _pricing_rows),
         ("PAYMENT", _payment_rows),
+        ("NOTES", _notes_section_rows(auto_note)),
     ])
 
     confirmed = ask_yes_no("Write this sale to the master sheet?")
@@ -3648,7 +4097,7 @@ def record_sale():
 
     if not _status_unchanged(row_index, current_status):
         _warn(f"This unit's status has changed since you started (no longer '{current_status}'). "
-              f"Someone else may have just updated it — nothing was written. Please re-check the SKU.")
+              f"Another user may have just updated it — nothing was written. Please re-check the SKU.")
         return
 
     # Total Cost (USD) and Selling Price (USD) aren't written by this
@@ -3661,7 +4110,7 @@ def record_sale():
         row_index, row, updates.keys() - {"Status"} | {"Total Cost (USD)", "Selling Price (USD)"}
     )
     if not _unchanged:
-        _warn(f"This unit's '{_conflict_col}' has changed since you started — someone else may have "
+        _warn(f"This unit's '{_conflict_col}' has changed since you started — another user may have "
               f"just updated it. Nothing was written. Please re-check the SKU.")
         return
 
@@ -3672,20 +4121,12 @@ def record_sale():
     # permanently hiding the cancellation from every future report. Read
     # fresh at commit time (not the Step-1 snapshot) so a concurrent
     # session's own note isn't discarded either.
-    if new_status == "Sold":
-        auto_note = f"[{date_sold_str} · SALE] Paid in full: ${amount_received:,.2f} received via {payment_method}."
-        updates["Transaction Notes"] = _fresh_notes_append(row_index, "Transaction Notes", [auto_note])
-    elif new_status == "Sold - Partial Payment":
-        auto_note = (
-            f"[{date_sold_str} · SALE] Initial partial payment of ${round(amount_received, 2):,.2f} received via {payment_method}. "
-            f"${amount_outstanding:,.2f} outstanding."
-        )
-        updates["Transaction Notes"] = _fresh_notes_append(row_index, "Transaction Notes", [auto_note])
+    updates["Transaction Notes"] = _fresh_notes_append(row_index, "Transaction Notes", [auto_note])
 
     if current_status == "Reserved":
-        updates["Inventory Notes"] = _strip_reservation_note(
+        updates["Inventory Notes"] = _normalize_inventory_notes(_strip_reservation_note(
             get_row_by_sheet_index(row_index).get("Inventory Notes", "")
-        )
+        ))
 
     update_row(row_index, updates)
 
@@ -3772,23 +4213,22 @@ def reprice_unit():
 
         _print_boxed("CURRENT RECORD", [
             ("UNIT", [
-                f"  {'SKU:':<19}{row['SKU']}",
-                f"  {'Weave Type:':<19}{row['Weave Type / Cluster']}",
-                f"  {'Supplier:':<19}{row['Supplier']}",
-                f"  {'Date Acquired:':<19}{row['Date Acquired']}",
+                f"  \033[1m{'SKU:':<19}\033[0m{row['SKU']}",
+                f"  \033[1m{'Weave Type:':<19}\033[0m{row['Weave Type / Cluster']}",
+                f"  \033[1m{'Supplier:':<19}\033[0m{row['Supplier']}",
+                f"  \033[1m{'Date Acquired:':<19}\033[0m{row['Date Acquired']}",
             ]),
             ("PRICING", [
-                f"  {'Total Cost:':<19}${_sheet_float(row['Total Cost (USD)']):,.2f}",
-                f"  {'Selling Price:':<19}${_sheet_float(row['Selling Price (USD)']):,.2f}",
-                f"  {'Current Markup %:':<19}{get_markup_color(_markup_pct)}{_markup_pct:.1f}%\033[0m",
-                f"  {'Current Margin %:':<19}{get_margin_color(_margin_pct)}{_margin_pct:.1f}%\033[0m",
+                f"  \033[1m{'Total Cost:':<19}\033[0m${_sheet_float(row['Total Cost (USD)']):,.2f}",
+                f"  \033[1m{'Selling Price:':<19}\033[0m${_sheet_float(row['Selling Price (USD)']):,.2f}",
+                f"  \033[1m{'Current Markup %:':<19}\033[0m{get_markup_color(_markup_pct)}{_markup_pct:.1f}%\033[0m",
+                f"  \033[1m{'Current Margin %:':<19}\033[0m{get_margin_color(_margin_pct, row['Weave Type / Cluster'])}{_margin_pct:.1f}%\033[0m",
             ]),
-            ("STATUS", [f"  {'Status:':<19}{_status_color}{current_status}\033[0m"]),
+            ("STATUS", [f"  \033[1m{'Status:':<19}\033[0m{_status_color}{current_status}\033[0m"]),
         ])
 
         if ask_yes_no("Is this the correct unit?"):
             break
-        print()
 
     # Step 3: Fetch ECB rate for original acquisition date (single attempt — date is fixed)
     total_cost_inr = _sheet_float(row["Total Cost (INR)"])
@@ -3815,14 +4255,14 @@ def reprice_unit():
     while True:
         print()
         path_choice = questionary.select(
-            "How would you like to set the new selling price?",
+            "",
             choices=[
                 "Enter a markup percentage",
                 "Enter a selling price (USD)",
                 questionary.Separator(" "),
                 _back_choice("Discard & exit"),
             ],
-            qmark="",
+            qmark="How would you like to set the new selling price?",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
@@ -3838,7 +4278,7 @@ def reprice_unit():
 
         pricing = calculate_pricing(total_cost_inr, ecb_rate, pricing_path, pricing_value)
 
-        _mc          = get_margin_color(pricing['margin_pct'])
+        _mc          = get_margin_color(pricing['margin_pct'], row['Weave Type / Cluster'])
         _muc         = get_markup_color(pricing['markup_pct'])
         _gp_sign     = signed(pricing['gross_profit_usd'])
         _gpc         = "\033[92m" if pricing['gross_profit_usd'] >= 0 else "\033[91m"
@@ -3851,18 +4291,18 @@ def reprice_unit():
         _mg_sign       = "+" if _mg_delta >= 0 else ""
         print(f"\n\033[38;5;202mPRICING PREVIEW\033[0m")
         print(_sep)
-        print(f"  {'Total Cost:':<17}${total_cost_usd:,.2f}")
+        print(f"  \033[1m{'Total Cost:':<17}\033[0m${total_cost_usd:,.2f}")
         print()
-        print(f"  {'Original Price:':<17}${old_selling_price:,.2f}")
-        print(f"  {'New Price:':<17}${pricing['selling_price_usd']:,.2f}")
-        print(f"  {'Price Change:':<17}{_price_sign}${abs(_price_chg):,.2f} ({_price_sign}{_price_chg_pct:.1f}%)")
+        print(f"  \033[1m{'Original Price:':<17}\033[0m${old_selling_price:,.2f}")
+        print(f"  \033[1m{'New Price:':<17}\033[0m${pricing['selling_price_usd']:,.2f}")
+        print(f"  \033[1m{'Price Change:':<17}\033[0m{_price_sign}${abs(_price_chg):,.2f} ({_price_sign}{_price_chg_pct:.1f}%)")
         print()
-        print(f"  {'Markup %:':<17}{_muc}{pricing['markup_pct']:.1f}%\033[0m  \033[2m({_mu_sign}{_mu_delta:.1f}%)\033[0m")
-        print(f"  {'Gross Profit:':<17}{_gpc}{_gp_sign}${abs(pricing['gross_profit_usd']):,.2f}\033[0m")
-        print(f"  {'Margin %:':<17}{_mc}{pricing['margin_pct']:.1f}%\033[0m  \033[2m({_mg_sign}{_mg_delta:.1f}%)\033[0m")
+        print(f"  \033[1m{'Markup %:':<17}\033[0m{_muc}{pricing['markup_pct']:.1f}%\033[0m  \033[2m({_mu_sign}{_mu_delta:.1f}%)\033[0m")
+        print(f"  \033[1m{'Gross Profit:':<17}\033[0m{_gpc}{_gp_sign}${abs(pricing['gross_profit_usd']):,.2f}\033[0m")
+        print(f"  \033[1m{'Margin %:':<17}\033[0m{_mc}{pricing['margin_pct']:.1f}%\033[0m  \033[2m({_mg_sign}{_mg_delta:.1f}%)\033[0m")
         print(_sep)
 
-        proceed, warned = check_pricing_warnings(pricing["margin_pct"], pricing["markup_pct"], pricing["gross_profit_usd"])
+        proceed, warned = check_pricing_warnings(pricing["margin_pct"], pricing["markup_pct"], row['Weave Type / Cluster'], pricing["gross_profit_usd"])
         if proceed is None:
             print("\nReprice cancelled. Returning to Main Menu.")
             return
@@ -3870,33 +4310,36 @@ def reprice_unit():
             break
 
     # Step 5: Confirmation summary
+    # Computed here (rather than at write time) so the box can show the
+    # exact [MM-DD-YYYY · REPRICE] line that will be appended to Inventory
+    # Notes -- not a preview that drifts from what's actually saved.
+    today_str = date.today().strftime("%m-%d-%Y")
+    reprice_note = f"[{today_str} · REPRICE] Repriced: ${old_selling_price:,.2f} → ${pricing['selling_price_usd']:,.2f}"
+
     _print_boxed("REPRICE SUMMARY", [
         ("UNIT", [
-            f"  {'SKU:':<17}{sku}",
+            f"  \033[1m{'SKU:':<17}\033[0m{sku}",
         ]),
         ("PRICING", [
-            f"  {'Total Cost:':<17}${total_cost_usd:,.2f}",
+            f"  \033[1m{'Total Cost:':<17}\033[0m${total_cost_usd:,.2f}",
             "",
-            f"  {'Original Price:':<17}${old_selling_price:,.2f}",
-            f"  {'New Price:':<17}${pricing['selling_price_usd']:,.2f}",
+            f"  \033[1m{'Original Price:':<17}\033[0m${old_selling_price:,.2f}",
+            f"  \033[1m{'New Price:':<17}\033[0m${pricing['selling_price_usd']:,.2f}",
             "",
-            f"  {'Gross Profit:':<17}{_gpc}{_gp_sign}${abs(pricing['gross_profit_usd']):,.2f}\033[0m",
-            f"  {'Markup %:':<17}{_muc}{pricing['markup_pct']:.1f}%\033[0m",
-            f"  {'Margin %:':<17}{_mc}{pricing['margin_pct']:.1f}%\033[0m",
+            f"  \033[1m{'Gross Profit:':<17}\033[0m{_gpc}{_gp_sign}${abs(pricing['gross_profit_usd']):,.2f}\033[0m",
+            f"  \033[1m{'Markup %:':<17}\033[0m{_muc}{pricing['markup_pct']:.1f}%\033[0m",
+            f"  \033[1m{'Margin %:':<17}\033[0m{_mc}{pricing['margin_pct']:.1f}%\033[0m",
         ]),
         ("EXCHANGE RATE", [
-            f"  {rate_date_str + ':':<17}1 USD = {ecb_rate:,.2f} INR",
+            f"  \033[1m{rate_date_str + ':':<17}\033[0m1 USD = {ecb_rate:,.2f} INR",
         ]),
+        ("NOTES", _notes_section_rows(reprice_note)),
     ])
 
     confirmed = ask_yes_no("Write this reprice to the master sheet?")
     if not confirmed:
         print("\nReprice cancelled. Returning to Main Menu.")
         return
-
-    # Step 6: Append reprice note to Inventory Notes — never overwrite
-    today_str = date.today().strftime("%m-%d-%Y")
-    reprice_note = f"[{today_str} · REPRICE] Repriced: ${old_selling_price:,.2f} → ${pricing['selling_price_usd']:,.2f}"
 
     updates = {
         "Selling Price (USD)": pricing["selling_price_usd"],
@@ -3910,7 +4353,7 @@ def reprice_unit():
 
     if not _status_unchanged(row_index, current_status):
         _warn(f"This unit's status has changed since you started (no longer '{current_status}'). "
-              f"Someone else may have just updated it — nothing was written. Please re-check the SKU.")
+              f"Another user may have just updated it — nothing was written. Please re-check the SKU.")
         return
 
     # Total Cost isn't written by this operation, but every figure above was
@@ -3922,11 +4365,11 @@ def reprice_unit():
         row_index, row, updates.keys() | {"Total Cost (INR)", "Total Cost (USD)"}
     )
     if not _unchanged:
-        _warn(f"This unit's '{_conflict_col}' has changed since you started — someone else may have "
+        _warn(f"This unit's '{_conflict_col}' has changed since you started — another user may have "
               f"just updated it. Nothing was written. Please re-check the SKU.")
         return
 
-    updates["Inventory Notes"] = _fresh_notes_append(row_index, "Inventory Notes", [reprice_note])
+    updates["Inventory Notes"] = _normalize_inventory_notes(_fresh_notes_append(row_index, "Inventory Notes", [reprice_note]))
     update_row(row_index, updates)
     print(f"\n\033[38;5;202m✓ {sku} repriced: ${old_selling_price:,.2f} → ${pricing['selling_price_usd']:,.2f}\033[0m")
 
@@ -3954,7 +4397,7 @@ def edit_inventory_details():
     # whatever order the user happened to edit fields in -- so every table
     # in this operation always reads top-to-bottom the same way regardless
     # of session path. Shared by the recalculation preview and the final
-    # PROPOSED CHANGES table, so the same field is never named two
+    # EDIT SUMMARY table, so the same field is never named two
     # different ways across the two.
     _FIELD_LABELS = {
         "Supplier": "Supplier:",
@@ -3987,6 +4430,13 @@ def edit_inventory_details():
 
         row = get_row_by_sheet_index(row_index)
         current_status = row.get("Status", "").strip()
+        # Captured under its own name (not read from `row` directly) because
+        # a couple of the nested functions below reassign a local `row` of
+        # their own for unrelated formatting -- once a name is assigned
+        # anywhere in a function body, Python treats it as local for that
+        # whole function, so those functions would raise UnboundLocalError
+        # trying to read the outer `row` before their own local reassignment.
+        _edit_weave_type = row["Weave Type / Cluster"]
 
         if current_status in ("Sold", "Sold - Partial Payment"):
             _warn(f"SKU '{sku}' has already been sold. This operation doesn't handle sold units.")
@@ -4017,31 +4467,30 @@ def edit_inventory_details():
 
         _print_boxed("CURRENT DETAILS", [
             ("UNIT", [
-                f"  {'Weave Type:':<24}{row['Weave Type / Cluster']}",
-                f"  {'Category Code:':<24}{row['Category Code']}",
-                f"  {'Supplier:':<24}{row['Supplier']}",
-                f"  {'Source Sheet + Tab:':<24}{row['Source Sheet + Tab']}",
-                f"  {'Date Acquired:':<24}{row['Date Acquired']}",
+                f"  \033[1m{'Weave Type:':<24}\033[0m{row['Weave Type / Cluster']}",
+                f"  \033[1m{'Category Code:':<24}\033[0m{row['Category Code']}",
+                f"  \033[1m{'Supplier:':<24}\033[0m{row['Supplier']}",
+                f"  \033[1m{'Source Sheet + Tab:':<24}\033[0m{row['Source Sheet + Tab']}",
+                f"  \033[1m{'Date Acquired:':<24}\033[0m{row['Date Acquired']}",
             ]),
             ("COST", [
-                f"  {'Base Price + GST (INR):':<24}{_sheet_float(row['Base Price + GST Tax (INR)']):,.2f}",
-                f"  {'Shipping (INR):':<24}{_sheet_float(row['Shipping Cost (INR)']):,.2f}",
-                f"  {'Detailing Cost (INR):':<24}{_sheet_float(row['Design Detailing Cost (INR)']):,.2f}",
-                f"  {'Total Cost (INR):':<24}{_sheet_float(row['Total Cost (INR)']):,.2f}",
-                f"  {'Total Cost (USD):':<24}${_sheet_float(row['Total Cost (USD)']):,.2f}",
+                f"  \033[1m{'Base Price + GST (INR):':<24}\033[0m{_sheet_float(row['Base Price + GST Tax (INR)']):,.2f}",
+                f"  \033[1m{'Shipping (INR):':<24}\033[0m{_sheet_float(row['Shipping Cost (INR)']):,.2f}",
+                f"  \033[1m{'Detailing Cost (INR):':<24}\033[0m{_sheet_float(row['Design Detailing Cost (INR)']):,.2f}",
+                f"  \033[1m{'Total Cost (INR):':<24}\033[0m{_sheet_float(row['Total Cost (INR)']):,.2f}",
+                f"  \033[1m{'Total Cost (USD):':<24}\033[0m${_sheet_float(row['Total Cost (USD)']):,.2f}",
             ]),
             ("PRICING", [
-                f"  {'Selling Price (USD):':<24}${_sheet_float(row['Selling Price (USD)']):,.2f}",
-                f"  {'Markup %:':<24}{get_markup_color(markup_pct)}{markup_pct:.1f}%\033[0m",
-                f"  {'Gross Profit (USD):':<24}${_sheet_float(row['Gross Profit (USD)']):,.2f}",
-                f"  {'Margin %:':<24}{get_margin_color(margin_pct)}{margin_pct:.1f}%\033[0m",
+                f"  \033[1m{'Selling Price (USD):':<24}\033[0m${_sheet_float(row['Selling Price (USD)']):,.2f}",
+                f"  \033[1m{'Markup %:':<24}\033[0m{get_markup_color(markup_pct)}{markup_pct:.1f}%\033[0m",
+                f"  \033[1m{'Gross Profit (USD):':<24}\033[0m${_sheet_float(row['Gross Profit (USD)']):,.2f}",
+                f"  \033[1m{'Margin %:':<24}\033[0m{get_margin_color(margin_pct, row['Weave Type / Cluster'])}{margin_pct:.1f}%\033[0m",
             ]),
-            ("STATUS", [f"  {'Status:':<24}{status_color}{current_status}\033[0m"]),
+            ("STATUS", [f"  \033[1m{'Status:':<24}\033[0m{status_color}{current_status}\033[0m"]),
         ])
 
         if ask_yes_no("Is this the correct unit?"):
             break
-        print()
 
     print()
 
@@ -4127,7 +4576,8 @@ def edit_inventory_details():
         new_margin = round((new_gross_profit / selling_price_usd) * 100, 2) if selling_price_usd else 0
 
         _wm_c, _nm_c   = get_markup_color(working['Markup %']), get_markup_color(new_markup)
-        _wmg_c, _nmg_c = get_margin_color(working['Margin %']), get_margin_color(new_margin)
+        _wmg_c, _nmg_c = (get_margin_color(working['Margin %'], _edit_weave_type),
+                          get_margin_color(new_margin, _edit_weave_type))
         _wgp_c = "\033[92m" if working['Gross Profit (USD)'] >= 0 else "\033[91m"
         _ngp_c = "\033[92m" if new_gross_profit >= 0 else "\033[91m"
         _wgp_sign, _ngp_sign = signed(working['Gross Profit (USD)']), signed(new_gross_profit)
@@ -4165,7 +4615,7 @@ def edit_inventory_details():
         ])
 
         proceed, warned = check_pricing_warnings(
-            new_margin, new_markup, new_gross_profit,
+            new_margin, new_markup, _edit_weave_type, new_gross_profit,
             exit_label="Discard this edit",
             recalibrate_label="Re-enter this value",
         )
@@ -4335,7 +4785,8 @@ def edit_inventory_details():
                 _last_date_str = new_date_str
 
             _wm_c, _nm_c   = get_markup_color(working['Markup %']), get_markup_color(new_markup)
-            _wmg_c, _nmg_c = get_margin_color(working['Margin %']), get_margin_color(new_margin)
+            _wmg_c, _nmg_c = (get_margin_color(working['Margin %'], _edit_weave_type),
+                              get_margin_color(new_margin, _edit_weave_type))
             _wgp_c = "\033[92m" if working['Gross Profit (USD)'] >= 0 else "\033[91m"
             _ngp_c = "\033[92m" if new_gross_profit >= 0 else "\033[91m"
             _wgp_sign, _ngp_sign = signed(working['Gross Profit (USD)']), signed(new_gross_profit)
@@ -4369,7 +4820,7 @@ def edit_inventory_details():
             ])
 
             proceed, warned = check_pricing_warnings(
-                new_margin, new_markup, new_gross_profit,
+                new_margin, new_markup, _edit_weave_type, new_gross_profit,
                 exit_label="Discard this edit",
                 recalibrate_label="Re-enter this value",
             )
@@ -4410,7 +4861,7 @@ def edit_inventory_details():
         decision wasn't final."""
         _stop_choice = "Done — review changes" if has_changes else "Cancel — no changes"
         # Ordered to match the UNIT -> COST build-up used by CURRENT DETAILS
-        # and PROPOSED CHANGES (Supplier, Source Sheet + Tab, Date Acquired,
+        # and EDIT SUMMARY (Supplier, Source Sheet + Tab, Date Acquired,
         # then cost components), not the order fields happen to be listed
         # in code -- Inventory Notes has no canonical section of its own,
         # so it sits with the other UNIT-adjacent fields.
@@ -4419,9 +4870,9 @@ def edit_inventory_details():
             _choices += ["Base Price + GST Tax (INR)", "Shipping Cost (INR)", "Design Detailing Cost (INR)"]
         _choices += [questionary.Separator(" "), _back_choice(_stop_choice)]
         field = questionary.select(
-            "Which field would you like to update?",
+            "",
             choices=_choices,
-            qmark="",
+            qmark="Which field would you like to update?",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
@@ -4518,12 +4969,12 @@ def edit_inventory_details():
 
     _collect_edits()
 
-    # PROPOSED CHANGES review + confirm loop -- shown once per review pass,
+    # EDIT SUMMARY review + confirm loop -- shown once per review pass,
     # not after every individual field edit. The "anything to show" check
     # is re-run every time this loop is entered, not just once before it --
     # "Edit more fields" re-invokes _collect_edits() and can legitimately
     # net back to zero (e.g. a field changed then reverted to its true
-    # original), which would otherwise render an empty PROPOSED CHANGES box
+    # original), which would otherwise render an empty EDIT SUMMARY box
     # and still offer to "Confirm and apply changes" on nothing.
     while True:
         _prune_settled_fields()
@@ -4587,31 +5038,50 @@ def edit_inventory_details():
         if _entries:
             label_width = max(len(_FIELD_LABELS[c]) for _, c, _, _ in _entries) + 2
             old_width   = max(_visible_len(od) for _, _, od, _ in _entries)
+        else:
+            label_width = len("SKU:") + 2
         _sections = []
         for section_name, _order in _SECTION_ORDER:
             rows = [
-                (f"  {_FIELD_LABELS[c]:<{label_width}}{_pad_visible(od, old_width)}  →  \033[2m(unchanged)\033[0m"
+                (f"  \033[1m{_FIELD_LABELS[c]:<{label_width}}\033[0m{_pad_visible(od, old_width)}  →  \033[2m(unchanged)\033[0m"
                  if nd is None else
-                 f"  {_FIELD_LABELS[c]:<{label_width}}{_pad_visible(od, old_width)}  →  {nd}")
+                 f"  \033[1m{_FIELD_LABELS[c]:<{label_width}}\033[0m{_pad_visible(od, old_width)}  →  {nd}")
                 for sn, c, od, nd in _entries if sn == section_name
             ]
+            if section_name == "UNIT":
+                # Every other summary table in the app shows the SKU as a
+                # row in the body, not only in the title -- unlike the rest
+                # of this UNIT section, this row is always present even when
+                # no UNIT field changed, so the box always self-identifies.
+                rows = [f"  \033[1m{'SKU:':<{label_width}}\033[0m{sku}"] + rows
             if rows:
                 _sections.append((section_name, rows))
-        if manual_note_lines:
-            _sections.append(("NOTES", [f"  {note}" for note in manual_note_lines]))
+        # Computed here (rather than only at final confirm) so the box can
+        # show the exact [MM-DD-YYYY · TAG] line(s) that will be appended to
+        # Inventory Notes -- not a preview that drifts from what's actually
+        # saved. Recomputed each time this loop re-renders (e.g. after
+        # "Edit more fields") so the preview always reflects current state.
+        today_str = date.today().strftime("%m-%d-%Y")
+        tagged_note_lines = [f"[{today_str} · NOTE] {n}" for n in manual_note_lines]
+        correction_note = f"[{today_str} · CORRECTION] " + " ".join(changes_log) if changes_log else ""
+        _notes_preview = list(tagged_note_lines)
+        if correction_note:
+            _notes_preview.append(correction_note)
+        if _notes_preview:
+            _sections.append(("NOTES", _notes_section_rows(*_notes_preview)))
 
-        _print_boxed(f"PROPOSED CHANGES — {sku}", _sections)
+        _print_boxed("EDIT SUMMARY", _sections)
         print()
 
         action = questionary.select(
-            "Apply these changes?",
+            "",
             choices=[
                 "Confirm and apply changes",
                 "Edit more fields",
                 questionary.Separator(" "),
                 _back_choice("Discard changes & continue"),
             ],
-            qmark="",
+            qmark="Apply these changes?",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
@@ -4619,21 +5089,16 @@ def edit_inventory_details():
         if action == "Confirm and apply changes":
             if not _status_unchanged(row_index, current_status):
                 _warn(f"This unit's status has changed since you started (no longer '{current_status}'). "
-                      f"Someone else may have just updated it — nothing was written. Please re-check the SKU.")
+                      f"Another user may have just updated it — nothing was written. Please re-check the SKU.")
                 return
 
             _unchanged, _conflict_col = _row_fields_unchanged(row_index, row, field_changed.keys())
             if not _unchanged:
                 _warn(f"This unit's '{_conflict_col}' has changed since you started editing — "
-                      f"someone else may have updated it. Nothing was written. Please re-check the SKU.")
+                      f"another user may have updated it. Nothing was written. Please re-check the SKU.")
                 return
 
-            today_str = date.today().strftime("%m-%d-%Y")
-            correction_note = f"[{today_str} · CORRECTION] " + " ".join(changes_log)
-            all_new_lines = [f"[{today_str} · NOTE] {n}" for n in manual_note_lines]
-            if changes_log:
-                all_new_lines.append(correction_note)
-            field_changed["Inventory Notes"] = _fresh_notes_append(row_index, "Inventory Notes", all_new_lines)
+            field_changed["Inventory Notes"] = _normalize_inventory_notes(_fresh_notes_append(row_index, "Inventory Notes", _notes_preview))
 
             update_row(row_index, field_changed)
             print(f"\n\033[38;5;202m✓ {sku} updated successfully.\033[0m")
@@ -4668,8 +5133,9 @@ def print_banner():
 def discount_simulator():
     """Read-only discount simulation tool. Never writes to the sheet."""
 
-    def _sim(total_cost_usd, selling_price_usd, discount_pct):
+    def _sim(total_cost_usd, selling_price_usd, discount_pct, weave_type):
         """Print the simulation results block for a given discount percentage."""
+        flag_below, _tier_target = _margin_thresholds(weave_type)
         original_markup_pct  = round((selling_price_usd - total_cost_usd) / total_cost_usd * 100, 2) if total_cost_usd else 0
         orig_gp_usd          = round(selling_price_usd - total_cost_usd, 2)
         orig_margin_pct      = round(orig_gp_usd / selling_price_usd * 100, 2) if selling_price_usd else 0
@@ -4690,12 +5156,12 @@ def discount_simulator():
         _disc_mc       = get_markup_color(disc_markup_pct)
 
         if gross_profit >= 0:
-            if orig_margin_pct >= 15 and margin_pct >= 15:
+            if orig_margin_pct >= flag_below and margin_pct >= flag_below:
                 _closing = "The unit remains profitable."
-            elif orig_margin_pct >= 15 and margin_pct < 15:
-                _closing = "The discount brings margin below the 15% threshold."
+            elif orig_margin_pct >= flag_below and margin_pct < flag_below:
+                _closing = f"The discount brings margin below the {flag_below}% threshold."
             else:
-                _closing = "The unit remains profitable but falls further below the 15% threshold."
+                _closing = f"The unit remains profitable but falls further below the {flag_below}% threshold."
             note = (
                 f"A {discount_pct:.1f}% discount reduces the selling price by "
                 f"${discount_amount:,.2f}, from ${selling_price_usd:,.2f} to ${actual_price:,.2f}. "
@@ -4718,20 +5184,20 @@ def discount_simulator():
         print(_eq)
         print("\033[38;5;202mCOST\033[0m")
         print(_sec)
-        print(f"  {'Total Cost:':<19}${total_cost_usd:,.2f}")
+        print(f"  \033[1m{'Total Cost:':<19}\033[0m${total_cost_usd:,.2f}")
         print()
         print("\033[38;5;202mORIGINAL\033[0m")
         print(_sec)
-        print(f"  {'Selling Price:':<19}${selling_price_usd:,.2f}")
-        print(f"  {'Markup:':<19}{_orig_mc}{original_markup_pct:.1f}%\033[0m")
-        print(f"  {'Margin:':<19}{get_margin_color(orig_margin_pct)}{orig_m_sign}{abs(orig_margin_pct):.1f}%\033[0m ({_orig_gpc}{orig_gp_sign}${abs(orig_gp_usd):,.2f}\033[0m)")
+        print(f"  \033[1m{'Selling Price:':<19}\033[0m${selling_price_usd:,.2f}")
+        print(f"  \033[1m{'Markup:':<19}\033[0m{_orig_mc}{original_markup_pct:.1f}%\033[0m")
+        print(f"  \033[1m{'Margin:':<19}\033[0m{get_margin_color(orig_margin_pct, weave_type)}{orig_m_sign}{abs(orig_margin_pct):.1f}%\033[0m ({_orig_gpc}{orig_gp_sign}${abs(orig_gp_usd):,.2f}\033[0m)")
         print()
         print("\033[38;5;202mDISCOUNTED\033[0m")
         print(_sec)
-        print(f"  {'Discount Applied:':<19}{discount_pct:.1f}% (-${discount_amount:,.2f})")
-        print(f"  {'Sale Price:':<19}${actual_price:,.2f}")
-        print(f"  {'Markup:':<19}{_disc_mc}{disc_mu_sign}{abs(disc_markup_pct):.1f}%\033[0m")
-        print(f"  {'Margin:':<19}{get_margin_color(margin_pct)}{mar_sign}{abs(margin_pct):.1f}%\033[0m ({_gpc}{gp_sign}${abs(gross_profit):,.2f}\033[0m)")
+        print(f"  \033[1m{'Discount Applied:':<19}\033[0m{discount_pct:.1f}% (-${discount_amount:,.2f})")
+        print(f"  \033[1m{'Sale Price:':<19}\033[0m${actual_price:,.2f}")
+        print(f"  \033[1m{'Markup:':<19}\033[0m{_disc_mc}{disc_mu_sign}{abs(disc_markup_pct):.1f}%\033[0m")
+        print(f"  \033[1m{'Margin:':<19}\033[0m{get_margin_color(margin_pct, weave_type)}{mar_sign}{abs(margin_pct):.1f}%\033[0m ({_gpc}{gp_sign}${abs(gross_profit):,.2f}\033[0m)")
         print()
         print("\033[38;5;202mNOTES\033[0m")
         print(_sec)
@@ -4743,20 +5209,20 @@ def discount_simulator():
             print(f"\033[91m⚠  BELOW COST\033[0m")
             print(f"\033[2m{'—' * 50}\033[0m")
             print("This unit is selling at a loss.")
-        elif margin_pct < 15:
+        elif margin_pct < flag_below:
             print()
-            print(f"{get_margin_color(margin_pct)}△ LOW MARGIN — Margin sits at {margin_pct:.1f}%, below the 15% threshold\033[0m")
+            print(f"{get_margin_color(margin_pct, weave_type)}△ LOW MARGIN — Margin sits at {margin_pct:.1f}%, below the {flag_below}% threshold\033[0m")
 
     # ── Sub-menu loop ──────────────────────────────────────────────────────────
     print("\n--- \033[1;38;5;124mDISCOUNT SIMULATOR\033[0m ---")
     while True:
         print()
         mode = questionary.select(
-            "Select an option:",
+            "",
             choices=["Look up an existing unit", "Simulate with custom figures",
                      questionary.Separator(" "),
                      _back_choice("Return to Main Menu")],
-            qmark="",
+            qmark="Select an option:",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
@@ -4802,7 +5268,7 @@ def discount_simulator():
                 _gp_sign     = signed(gross_profit)
                 _m_sign      = signed(margin_pct)
                 _mc          = get_markup_color(orig_markup)
-                _mmc         = get_margin_color(margin_pct)
+                _mmc         = get_margin_color(margin_pct, row['Weave Type / Cluster'])
 
                 _sc = get_status_color(status)
 
@@ -4814,17 +5280,17 @@ def discount_simulator():
                 print(_eq)
                 print("\033[38;5;202mUNIT\033[0m")
                 print(_sec)
-                print(f"  {'SKU:':<20}{sku}")
-                print(f"  {'Status:':<20}{_sc}{status}\033[0m")
-                print(f"  {'Days in Inventory:':<20}{days_in_inventory}")
+                print(f"  \033[1m{'SKU:':<20}\033[0m{sku}")
+                print(f"  \033[1m{'Status:':<20}\033[0m{_sc}{status}\033[0m")
+                print(f"  \033[1m{'Days in Inventory:':<20}\033[0m{days_in_inventory}")
                 print()
                 print("\033[38;5;202mPRICING\033[0m")
                 print(_sec)
-                print(f"  {'Total Cost:':<20}${total_cost_usd:,.2f}")
-                print(f"  {'Selling Price:':<20}${selling_price_usd:,.2f}")
-                print(f"  {'Markup:':<20}{_mc}{orig_markup:.1f}%\033[0m")
-                print(f"  {'Gross Profit:':<20}{_gpc}{_gp_sign}${abs(gross_profit):,.2f}\033[0m")
-                print(f"  {'Margin:':<20}{_mmc}{_m_sign}{abs(margin_pct):.1f}%\033[0m")
+                print(f"  \033[1m{'Total Cost:':<20}\033[0m${total_cost_usd:,.2f}")
+                print(f"  \033[1m{'Selling Price:':<20}\033[0m${selling_price_usd:,.2f}")
+                print(f"  \033[1m{'Markup:':<20}\033[0m{_mc}{orig_markup:.1f}%\033[0m")
+                print(f"  \033[1m{'Gross Profit:':<20}\033[0m{_gpc}{_gp_sign}${abs(gross_profit):,.2f}\033[0m")
+                print(f"  \033[1m{'Margin:':<20}\033[0m{_mmc}{_m_sign}{abs(margin_pct):.1f}%\033[0m")
                 print(_eq)
 
                 if gross_profit < 0:
@@ -4832,9 +5298,10 @@ def discount_simulator():
                     print(f"\033[91m⚠  BELOW COST\033[0m")
                     print(f"\033[2m{'—' * 50}\033[0m")
                     print("Current pricing is already at a loss, prior to any discount.")
-                elif margin_pct < 15:
+                elif margin_pct < _margin_thresholds(row['Weave Type / Cluster'])[0]:
                     print()
-                    print(f"{get_margin_color(margin_pct)}△ LOW MARGIN — Margin sits at {margin_pct:.1f}%, below the 15% threshold, prior to any discount\033[0m")
+                    _flag_below = _margin_thresholds(row['Weave Type / Cluster'])[0]
+                    print(f"{get_margin_color(margin_pct, row['Weave Type / Cluster'])}△ LOW MARGIN — Margin sits at {margin_pct:.1f}%, below the {_flag_below}% threshold, prior to any discount\033[0m")
 
                 if status == "Reserved":
                     print("\nNote: This unit is reserved for a customer — simulation only.")
@@ -4846,7 +5313,7 @@ def discount_simulator():
                 if _run_sim:
                     while True:  # discount loop
                         discount_pct = ask_percent("Discount to simulate:", allow_zero=False)
-                        _sim(total_cost_usd, selling_price_usd, discount_pct)
+                        _sim(total_cost_usd, selling_price_usd, discount_pct, row['Weave Type / Cluster'])
                         if not ask_yes_no("Try a different discount?"):
                             break
 
@@ -4874,11 +5341,20 @@ def discount_simulator():
                         return
 
             total_cost_usd = round(total_cost_inr / ecb_rate, 2)
+
+            # No real SKU here to read a weave type from, so the hero/
+            # supplemental margin tier has to be asked directly -- the
+            # exact weave type doesn't matter for thresholds, only which
+            # tier it falls in, so a representative placeholder name is
+            # enough to drive the shared threshold/color helpers.
+            _is_hero = ask_yes_no("Is this a hero/exclusive category (Kanjivaram, Gadwal, or Banaras)?")
+            _hypothetical_weave = "Kanjivaram" if _is_hero else "Chanderi"
+
             _sec = f"\033[2m{'—' * 50}\033[0m"
             print(f"\n\033[38;5;202mCOST BASIS\033[0m")
             print(_sec)
-            print(f"  {'Total Cost (INR):':<19}₹{total_cost_inr:,.0f}")
-            print(f"  {'Total Cost (USD):':<19}${total_cost_usd:,.2f}")
+            print(f"  \033[1m{'Total Cost (INR):':<19}\033[0m₹{total_cost_inr:,.0f}")
+            print(f"  \033[1m{'Total Cost (USD):':<19}\033[0m${total_cost_usd:,.2f}")
             print(_sec)
 
             restart_pricing = True
@@ -4886,14 +5362,14 @@ def discount_simulator():
                 restart_pricing = False
                 print()
                 path = questionary.select(
-                    "How would you like to set the selling price?",
+                    "",
                     choices=[
                         "Enter a markup percentage",
                         "Enter a selling price (USD)",
                         questionary.Separator(" "),
                         _back_choice("Discard & exit"),
                     ],
-                    qmark="",
+                    qmark="How would you like to set the selling price?",
                     instruction=" ",
                     style=_MENU_STYLE,
                 ).unsafe_ask()
@@ -4914,10 +5390,10 @@ def discount_simulator():
                 _sec = f"\033[2m{'—' * 50}\033[0m"
                 print(f"\n\033[38;5;202mBASE PRICING\033[0m")
                 print(_sec)
-                print(f"  {'Selling Price:':<16}${selling_price_usd:,.2f}")
-                print(f"  {'Markup:':<16}{get_markup_color(base_markup)}{base_markup:.1f}%\033[0m")
-                print(f"  {'Gross Profit:':<16}{_base_gpc}{_base_gp_sign}${abs(base_gross):,.2f}\033[0m")
-                print(f"  {'Margin:':<16}{get_margin_color(base_margin)}{_base_m_sign}{abs(base_margin):.1f}%\033[0m")
+                print(f"  \033[1m{'Selling Price:':<16}\033[0m${selling_price_usd:,.2f}")
+                print(f"  \033[1m{'Markup:':<16}\033[0m{get_markup_color(base_markup)}{base_markup:.1f}%\033[0m")
+                print(f"  \033[1m{'Gross Profit:':<16}\033[0m{_base_gpc}{_base_gp_sign}${abs(base_gross):,.2f}\033[0m")
+                print(f"  \033[1m{'Margin:':<16}\033[0m{get_margin_color(base_margin, _hypothetical_weave)}{_base_m_sign}{abs(base_margin):.1f}%\033[0m")
                 print(_sec)
 
                 if base_gross < 0:
@@ -4925,9 +5401,10 @@ def discount_simulator():
                     print(f"\033[91m⚠  BELOW COST\033[0m")
                     print(f"\033[2m{'—' * 50}\033[0m")
                     print("Current pricing is already at a loss, prior to any discount.")
-                elif base_margin < 15:
+                elif base_margin < _margin_thresholds(_hypothetical_weave)[0]:
                     print()
-                    print(f"{get_margin_color(base_margin)}△ LOW MARGIN — Margin sits at {base_margin:.1f}%, below the 15% threshold, prior to any discount\033[0m")
+                    _flag_below = _margin_thresholds(_hypothetical_weave)[0]
+                    print(f"{get_margin_color(base_margin, _hypothetical_weave)}△ LOW MARGIN — Margin sits at {base_margin:.1f}%, below the {_flag_below}% threshold, prior to any discount\033[0m")
 
                 _run_sim = True
                 if base_gross < 0:
@@ -4936,7 +5413,7 @@ def discount_simulator():
                 if _run_sim:
                     while True:  # discount loop
                         discount_pct = ask_percent("Discount to simulate:", allow_zero=False)
-                        _sim(total_cost_usd, selling_price_usd, discount_pct)
+                        _sim(total_cost_usd, selling_price_usd, discount_pct, _hypothetical_weave)
                         if not ask_yes_no("Try a different discount?"):
                             break
 
@@ -5011,8 +5488,13 @@ def record_outstanding_payment():
             dc    = _days_color(days)
             print(f"  {sku:<14}{cust:<22}${amt:<15,.2f}{dc}{_days_display(days)}\033[0m")
         _footer = f"Units Outstanding: {len(all_sorted)} | Amount Outstanding: ${total_outstanding:,.2f}"
+        _footer = _footer.center(70)  # center on the plain text first -- centering after
+        # adding the bold codes would count their invisible characters toward the width
+        # and throw the padding off
+        _footer = (_footer.replace("Units Outstanding:", "\033[1mUnits Outstanding:\033[0m")
+                           .replace("Amount Outstanding:", "\033[1mAmount Outstanding:\033[0m"))
         print(_eq)
-        print(_footer.center(70))
+        print(_footer)
         print(_eq)
 
         # Entry menu
@@ -5020,11 +5502,11 @@ def record_outstanding_payment():
         while selected_row is None:
             print()
             nav = questionary.select(
-                "How would you like to select a unit?",
+                "",
                 choices=["Enter by SKU", "Filter by customer",
                          questionary.Separator(" "),
                          _back_choice("Return to Main Menu")],
-                qmark="",
+                qmark="How would you like to select a unit?",
                 instruction=" ",
                 style=_MENU_STYLE,
             ).unsafe_ask()
@@ -5036,7 +5518,8 @@ def record_outstanding_payment():
             elif nav == "Enter by SKU":
                 sku_list = sorted(r.get("SKU", "").strip() for r in all_sorted)
                 while True:
-                    raw = input("\nSearch SKU (or press Enter to see all): ").strip().upper()
+                    raw = input(f"\n\033[1mSearch SKU (or press Enter to see all):\033[0m {_ANSWER_COLOR}").strip().upper()
+                    print("\033[0m", end="")
                     matches = sorted([s for s in sku_list if raw in s.upper()]) if raw else sku_list
                     if not matches:
                         _warn(f"No outstanding units matching '{raw}'. Please try again.")
@@ -5046,12 +5529,12 @@ def record_outstanding_payment():
                     else:
                         print()
                         chosen_sku = questionary.select(
-                            "Select a unit:",
+                            "",
                             choices=matches + [
                                 questionary.Separator(" "),
                                 _back_choice("Change selection method"),
                             ],
-                            qmark="",
+                            qmark="Select a unit:",
                             instruction=" ",
                             style=_MENU_STYLE,
                         ).unsafe_ask()
@@ -5068,7 +5551,7 @@ def record_outstanding_payment():
                 # picker. Location is shown alongside each name so those
                 # entries are actually distinguishable in the list, not
                 # just correctly separated behind the scenes.
-                _FILTER_STYLE = Style.from_dict({"customer-location": "#777777"})
+                _FILTER_STYLE = Style.from_dict({"customer-location": "#777777", "qmark": "fg:default bold"})
                 seen_keys, all_customers = set(), []
                 for r in partial_rows:
                     # Not pre-.strip()'d here -- gspread's get_all_records()
@@ -5092,7 +5575,8 @@ def record_outstanding_payment():
                 selected_customer = None
                 want_nav_back = False
                 while selected_customer is None:
-                    query = input("\nCustomer search (or press Enter to see all): ").strip()
+                    query = input(f"\n\033[1mCustomer search (or press Enter to see all):\033[0m {_ANSWER_COLOR}").strip()
+                    print("\033[0m", end="")
                     if _looks_like_phone_query(query):
                         _warn("Customer names cannot be numbers. Please enter a name or press Enter to see all.")
                         continue
@@ -5114,12 +5598,12 @@ def record_outstanding_payment():
                                       if c["location"] else c["name"])
                             choices.append(questionary.Choice(title=title, value=c))
                         selected_customer = questionary.select(
-                            "Select a customer:",
+                            "",
                             choices=choices + [
                                 questionary.Separator(" "),
                                 _back_choice("Change selection method"),
                             ],
-                            qmark="",
+                            qmark="Select a customer:",
                             instruction=" ",
                             style=_FILTER_STYLE,
                         ).unsafe_ask()
@@ -5143,12 +5627,12 @@ def record_outstanding_payment():
                 else:
                     print()
                     chosen_sku = questionary.select(
-                        f"Outstanding units for {selected_customer['name']}:",
+                        "",
                         choices=sku_options + [
                             questionary.Separator(" "),
                             _back_choice("Change selection method"),
                         ],
-                        qmark="",
+                        qmark=f"Outstanding units for {selected_customer['name']}:",
                         instruction=" ",
                         style=_MENU_STYLE,
                     ).unsafe_ask()
@@ -5184,13 +5668,13 @@ def record_outstanding_payment():
 
         _payment_rows = []
         if has_discount:
-            _payment_rows.append(f"  {'Listed Price:':<22}${selling_price:,.2f}")
-            _payment_rows.append(f"  {'Discount:':<22}\033[33m{discount_pct:.1f}%\033[0m")
-            _payment_rows.append(f"  {'Selling Price:':<22}${actual_price:,.2f}")
+            _payment_rows.append(f"  \033[1m{'Listed Price:':<22}\033[0m${selling_price:,.2f}")
+            _payment_rows.append(f"  \033[1m{'Discount:':<22}\033[0m\033[33m{discount_pct:.1f}%\033[0m")
+            _payment_rows.append(f"  \033[1m{'Selling Price:':<22}\033[0m${actual_price:,.2f}")
         else:
-            _payment_rows.append(f"  {'Selling Price:':<22}${selling_price:,.2f}")
-        _payment_rows.append(f"  {'Amount Received:':<22}\033[92m${amount_received:,.2f}\033[0m")
-        _payment_rows.append(f"  {'Amount Outstanding:':<22}\033[91m${amount_outstanding:,.2f}\033[0m")
+            _payment_rows.append(f"  \033[1m{'Selling Price:':<22}\033[0m${selling_price:,.2f}")
+        _payment_rows.append(f"  \033[1m{'Amount Received:':<22}\033[0m\033[92m${amount_received:,.2f}\033[0m")
+        _payment_rows.append(f"  \033[1m{'Amount Outstanding:':<22}\033[0m\033[91m${amount_outstanding:,.2f}\033[0m")
 
         _notes_rows = []
         if txn_notes:
@@ -5201,11 +5685,11 @@ def record_outstanding_payment():
 
         _print_boxed("TRANSACTION SUMMARY", [
             ("TRANSACTION", [
-                f"  {'SKU:':<22}{sku}",
-                f"  {'Customer:':<22}{customer_name}",
-                f"  {'Sales Channel:':<22}{sales_channel}",
-                f"  {'Date Sold:':<22}{date_sold_str}",
-                f"  {'Days Outstanding:':<22}{days_str}",
+                f"  \033[1m{'SKU:':<22}\033[0m{sku}",
+                f"  \033[1m{'Customer:':<22}\033[0m{customer_name}",
+                f"  \033[1m{'Sales Channel:':<22}\033[0m{sales_channel}",
+                f"  \033[1m{'Date Sold:':<22}\033[0m{date_sold_str}",
+                f"  \033[1m{'Days Outstanding:':<22}\033[0m{days_str}",
             ]),
             ("PAYMENT", _payment_rows),
             ("NOTES", _notes_rows),
@@ -5249,17 +5733,18 @@ def record_outstanding_payment():
 
         _print_boxed("PAYMENT SUMMARY", [
             ("TRANSACTION", [
-                f"  {'SKU:':<22}{sku}",
-                f"  {'Customer:':<22}{customer_name}",
-                f"  {'Payment Date:':<22}{payment_date_str}",
+                f"  \033[1m{'SKU:':<22}\033[0m{sku}",
+                f"  \033[1m{'Customer:':<22}\033[0m{customer_name}",
+                f"  \033[1m{'Payment Date:':<22}\033[0m{payment_date_str}",
             ]),
             ("PAYMENT", [
-                f"  {'Payment Received:':<22}\033[92m${payment:,.2f}\033[0m",
-                f"  {'Payment Method:':<22}{payment_method}",
-                f"  {'Amount Received:':<22}\033[92m${new_received:,.2f}\033[0m",
-                f"  {'Amount Outstanding:':<22}{_outstanding_color}${new_outstanding:,.2f}\033[0m",
-                f"  {'Status:':<22}{_status_color}{new_status}\033[0m",
+                f"  \033[1m{'Payment Received:':<22}\033[0m\033[92m${payment:,.2f}\033[0m",
+                f"  \033[1m{'Payment Method:':<22}\033[0m{payment_method}",
+                f"  \033[1m{'Amount Received:':<22}\033[0m\033[92m${new_received:,.2f}\033[0m",
+                f"  \033[1m{'Amount Outstanding:':<22}\033[0m{_outstanding_color}${new_outstanding:,.2f}\033[0m",
+                f"  \033[1m{'Status:':<22}\033[0m{_status_color}{new_status}\033[0m",
             ]),
+            ("NOTES", _notes_section_rows(note_append)),
         ])
 
         confirmed = ask_yes_no("Confirm and write to sheet?")
@@ -5283,7 +5768,7 @@ def record_outstanding_payment():
         # path -- this call site never had it.
         if not _status_unchanged(sheet_row, "Sold - Partial Payment"):
             _warn("This unit's status has changed since you started (no longer 'Sold - Partial Payment'). "
-                  "Someone else may have just updated it — nothing was written. Please re-check the SKU.")
+                  "Another user may have just updated it — nothing was written. Please re-check the SKU.")
             return
 
         # Numeric-aware, not the generic string-based _row_fields_unchanged --
@@ -5298,7 +5783,7 @@ def record_outstanding_payment():
         _fresh_outstanding = _sheet_float(get_row_by_sheet_index(sheet_row).get("Amount Outstanding (USD)"))
         if round(_fresh_outstanding, 2) != round(amount_outstanding, 2):
             _warn(f"This unit's outstanding balance has changed since you started (was "
-                  f"${amount_outstanding:,.2f}, is now ${_fresh_outstanding:,.2f}) — someone else may "
+                  f"${amount_outstanding:,.2f}, is now ${_fresh_outstanding:,.2f}) — another user may "
                   f"have recorded a different payment. Nothing was written. Please re-check the SKU.")
             return
 
@@ -5377,7 +5862,7 @@ def cancel_sale():
                         # redundant/duplicate REFUND-CLEARED note.
                         _old_inv = _rrow.get("Inventory Notes", "").strip()
                         if not any('· REFUND]' in l for l in _old_inv.split('\n')):
-                            _warn(f"This refund for {_psku} appears to have already been cleared by someone else — nothing was written.")
+                            _warn(f"This refund for {_psku} appears to have already been cleared by another user — nothing was written.")
                         else:
                             # Strip the · REFUND flag from Inventory Notes — no REFUND-CLEARED left behind
                             _new_inv = '\n'.join(
@@ -5390,7 +5875,7 @@ def cancel_sale():
                             _new_txn   = f"{_old_txn}\n{_cleared}".strip() if _old_txn else _cleared
 
                             update_row(_ri, {
-                                "Inventory Notes":   _new_inv,
+                                "Inventory Notes":   _normalize_inventory_notes(_new_inv),
                                 "Transaction Notes": _new_txn,
                             })
                             print(f"\n\033[38;5;202m✓ {_psku} — refund of {_pamt} marked as issued.\033[0m")
@@ -5433,33 +5918,32 @@ def cancel_sale():
         actual_price   = _sheet_float(row.get("Actual Selling Price (USD)", ""))
 
         _sale_rows = [
-            f"  {'Customer:':<20}{row.get('Customer Name', '')}",
-            f"  {'Date Sold:':<20}{row.get('Date Sold', '')}",
-            f"  {'Sales Channel:':<20}{row.get('Sales Channel', '')}",
+            f"  \033[1m{'Customer:':<20}\033[0m{row.get('Customer Name', '')}",
+            f"  \033[1m{'Date Sold:':<20}\033[0m{row.get('Date Sold', '')}",
+            f"  \033[1m{'Sales Channel:':<20}\033[0m{row.get('Sales Channel', '')}",
         ]
         if selling_price:
-            _sale_rows.append(f"  {'Selling Price:':<20}${selling_price:,.2f}")
+            _sale_rows.append(f"  \033[1m{'Selling Price:':<20}\033[0m${selling_price:,.2f}")
         if actual_price and actual_price != selling_price:
-            _sale_rows.append(f"  {'Unit Sold For:':<20}${actual_price:,.2f}")
+            _sale_rows.append(f"  \033[1m{'Unit Sold For:':<20}\033[0m${actual_price:,.2f}")
         if current_status == "Sold - Partial Payment":
             amt_recv = _sheet_float(row.get("Amount Received (USD)", ""))
             amt_out  = _sheet_float(row.get("Amount Outstanding (USD)", ""))
-            _sale_rows.append(f"  {'Amount Received:':<20}${amt_recv:,.2f}")
-            _sale_rows.append(f"  {'Amount Outstanding:':<20}${amt_out:,.2f}")
-        _sale_rows.append(f"  {'Status:':<20}{_status_color}{current_status}\033[0m")
+            _sale_rows.append(f"  \033[1m{'Amount Received:':<20}\033[0m${amt_recv:,.2f}")
+            _sale_rows.append(f"  \033[1m{'Amount Outstanding:':<20}\033[0m${amt_out:,.2f}")
+        _sale_rows.append(f"  \033[1m{'Status:':<20}\033[0m{_status_color}{current_status}\033[0m")
 
         _print_boxed("CURRENT RECORD", [
             ("UNIT", [
-                f"  {'SKU:':<20}{row['SKU']}",
-                f"  {'Weave Type:':<20}{row['Weave Type / Cluster']}",
-                f"  {'Supplier:':<20}{row['Supplier']}",
+                f"  \033[1m{'SKU:':<20}\033[0m{row['SKU']}",
+                f"  \033[1m{'Weave Type:':<20}\033[0m{row['Weave Type / Cluster']}",
+                f"  \033[1m{'Supplier:':<20}\033[0m{row['Supplier']}",
             ]),
             ("SALE", _sale_rows),
         ])
 
         if ask_yes_no("Is this the correct unit?"):
             break
-        print()
 
     # Step 3: Cancellation reason (mandatory — every cancellation must be documented)
     cancel_reason = ask_text(
@@ -5498,41 +5982,28 @@ def cancel_sale():
     _av_color = get_status_color("Available")
 
     _txn_rows = [
-        f"  {'Customer:':<20}{row.get('Customer Name', '')}",
-        f"  {'Date Sold:':<20}{row.get('Date Sold', '')}",
-        f"  {'Sales Channel:':<20}{row.get('Sales Channel', '')}",
+        f"  \033[1m{'Customer:':<20}\033[0m{row.get('Customer Name', '')}",
+        f"  \033[1m{'Date Sold:':<20}\033[0m{row.get('Date Sold', '')}",
+        f"  \033[1m{'Sales Channel:':<20}\033[0m{row.get('Sales Channel', '')}",
     ]
     if actual_price:
-        _txn_rows.append(f"  {'Unit Sold For:':<20}${actual_price:,.2f}")
+        _txn_rows.append(f"  \033[1m{'Unit Sold For:':<20}\033[0m${actual_price:,.2f}")
     if current_status == "Sold - Partial Payment":
-        _txn_rows.append(f"  {'Amount Received:':<20}${_sheet_float(row.get('Amount Received (USD)', '')):,.2f}")
-        _txn_rows.append(f"  {'Amount Outstanding:':<20}${_sheet_float(row.get('Amount Outstanding (USD)', '')):,.2f}")
+        _txn_rows.append(f"  \033[1m{'Amount Received:':<20}\033[0m${_sheet_float(row.get('Amount Received (USD)', '')):,.2f}")
+        _txn_rows.append(f"  \033[1m{'Amount Outstanding:':<20}\033[0m${_sheet_float(row.get('Amount Outstanding (USD)', '')):,.2f}")
 
-    _action_rows = [f"  {'Status:':<20}{_status_color}{current_status}\033[0m  →  {_av_color}Available\033[0m"]
+    _action_rows = [f"  \033[1m{'Status:':<20}\033[0m{_status_color}{current_status}\033[0m  →  {_av_color}Available\033[0m"]
     if cancel_reason:
         _reason_lines = textwrap.wrap(cancel_reason, width=38)
-        _action_rows.append(f"  {'Reason:':<20}{_reason_lines[0]}")
+        _action_rows.append(f"  \033[1m{'Reason:':<20}\033[0m{_reason_lines[0]}")
         for _rl in _reason_lines[1:]:
             _action_rows.append(f"  {'':<20}{_rl}")
     if _refund_label:
-        _action_rows.append(f"  {'Refund:':<20}{_refund_label}")
+        _action_rows.append(f"  \033[1m{'Refund:':<20}\033[0m{_refund_label}")
 
-    _print_boxed("CANCELLATION SUMMARY", [
-        ("UNIT", [
-            f"  {'SKU:':<20}{sku}",
-            f"  {'Weave Type:':<20}{row['Weave Type / Cluster']}",
-            f"  {'Supplier:':<20}{row['Supplier']}",
-        ]),
-        ("TRANSACTION BEING REVERSED", _txn_rows),
-        ("ACTION", _action_rows),
-    ])
-
-    confirmed = ask_yes_no("Cancel this sale and restore the unit to Available?")
-    if not confirmed:
-        print("\nCancellation discarded. Returning to Main Menu.")
-        return
-
-    # Build audit note appended to Transaction Notes for traceability
+    # Computed here (rather than at write time) so the box can show the
+    # exact [MM-DD-YYYY · TAG] line(s) that will be appended to Transaction/
+    # Inventory Notes -- not a preview that drifts from what's actually saved.
     today_str       = date.today().strftime("%m-%d-%Y")
     _orig_customer  = row.get("Customer Name", "").strip()
     _orig_date_sold = row.get("Date Sold", "").strip()
@@ -5544,8 +6015,28 @@ def cancel_sale():
         note_sub += f" for ${actual_price:,.2f}"
     if note_sub:
         note_sub += "."
-    reason_clause = f" Reason for cancelling sale of {sku}: {cancel_reason}." if cancel_reason else ""
+    reason_clause = f" Reason for cancelling sale of {sku}: {cancel_reason.rstrip('.')}." if cancel_reason else ""
     _new_audit_note = f"[{today_str} · CANCEL] Sale cancelled. {note_sub}{reason_clause}{_refund_clause}".strip()
+    _refund_flag = (
+        f"[{today_str} · REFUND] ${_partial_amt_recv:,.2f} refund pending — {_orig_customer}"
+        if _refund_pending else ""
+    )
+
+    _print_boxed("CANCELLATION SUMMARY", [
+        ("UNIT", [
+            f"  \033[1m{'SKU:':<20}\033[0m{sku}",
+            f"  \033[1m{'Weave Type:':<20}\033[0m{row['Weave Type / Cluster']}",
+            f"  \033[1m{'Supplier:':<20}\033[0m{row['Supplier']}",
+        ]),
+        ("TRANSACTION BEING REVERSED", _txn_rows),
+        ("ACTION", _action_rows),
+        ("NOTES", _notes_section_rows(_new_audit_note, _refund_flag)),
+    ])
+
+    confirmed = ask_yes_no("Cancel this sale and restore the unit to Available?")
+    if not confirmed:
+        print("\nCancellation discarded. Returning to Main Menu.")
+        return
 
     updates = {
         "Date Sold":                  "",
@@ -5569,7 +6060,7 @@ def cancel_sale():
 
     if not _status_unchanged(row_index, current_status):
         _warn(f"This unit's status has changed since you started (no longer '{current_status}'). "
-              f"Someone else may have just updated it — nothing was written. Please re-check the SKU.")
+              f"Another user may have just updated it — nothing was written. Please re-check the SKU.")
         return
 
     # Total Cost (USD) and Selling Price (USD) aren't written by this
@@ -5581,7 +6072,7 @@ def cancel_sale():
         row_index, row, updates.keys() - {"Status"} | {"Total Cost (USD)", "Selling Price (USD)"}
     )
     if not _unchanged:
-        _warn(f"This unit's '{_conflict_col}' has changed since you started — someone else may have "
+        _warn(f"This unit's '{_conflict_col}' has changed since you started — another user may have "
               f"just updated it (e.g. a payment recorded against it). Nothing was written. "
               f"Please re-check the SKU.")
         return
@@ -5597,8 +6088,7 @@ def cancel_sale():
     # is (read fresh, not the stale snapshot, so this cancel doesn't
     # accidentally revert a note someone else just added).
     if _refund_pending:
-        _refund_flag = f"[{today_str} · REFUND] ${_partial_amt_recv:,.2f} refund pending — {_orig_customer}"
-        updates["Inventory Notes"] = _fresh_notes_append(row_index, "Inventory Notes", [_refund_flag])
+        updates["Inventory Notes"] = _normalize_inventory_notes(_fresh_notes_append(row_index, "Inventory Notes", [_refund_flag]))
 
     update_row(row_index, updates)
     print(f"\n\033[38;5;202m✓ {sku} sale cancelled. Unit restored to Available.\033[0m")
@@ -5655,28 +6145,28 @@ def manage_reservation():
         selling_price_fmt = f"${_sheet_float(row.get('Selling Price (USD)', '')):,.2f}"
 
         _unit_rows = [
-            f"  {'SKU:':<18}{row['SKU']}",
-            f"  {'Weave Type:':<18}{row['Weave Type / Cluster']}",
-            f"  {'Supplier:':<18}{row['Supplier']}",
-            f"  {'Date Acquired:':<18}{row['Date Acquired']}",
-            f"  {'Selling Price:':<18}{selling_price_fmt}",
+            f"  \033[1m{'SKU:':<18}\033[0m{row['SKU']}",
+            f"  \033[1m{'Weave Type:':<18}\033[0m{row['Weave Type / Cluster']}",
+            f"  \033[1m{'Supplier:':<18}\033[0m{row['Supplier']}",
+            f"  \033[1m{'Date Acquired:':<18}\033[0m{row['Date Acquired']}",
+            f"  \033[1m{'Selling Price:':<18}\033[0m{selling_price_fmt}",
         ]
         _sections = [("UNIT", _unit_rows)]
         if current_status == "Available":
-            _sections.append(("STATUS", [f"  {'Status:':<18}{_status_color}{current_status}\033[0m"]))
+            _sections.append(("STATUS", [f"  \033[1m{'Status:':<18}\033[0m{_status_color}{current_status}\033[0m"]))
         if current_status == "Reserved":
             _rdate        = row.get("Reserved Date", "").strip()
             _reserver_cur = _get_reserver_name(row.get("Inventory Notes", "")) or "—"
             _res_rows = [
-                f"  {'Reserved By:':<18}{_reserver_cur}",
-                f"  {'Reserved Date:':<18}{_rdate}",
+                f"  \033[1m{'Reserved By:':<18}\033[0m{_reserver_cur}",
+                f"  \033[1m{'Reserved Date:':<18}\033[0m{_rdate}",
             ]
             if _rdate:
                 _days_res, _res_expired = _reservation_days(_rdate)
                 if _days_res is not None:
                     _dr_color = "\033[91m" if _res_expired else "\033[92m"
-                    _res_rows.append(f"  {'Days Reserved:':<18}{_dr_color}{_days_res} of 7\033[0m")
-            _res_rows.append(f"  {'Status:':<18}{_status_color}{current_status}\033[0m")
+                    _res_rows.append(f"  \033[1m{'Days Reserved:':<18}\033[0m{_dr_color}{_days_res} of 7\033[0m")
+            _res_rows.append(f"  \033[1m{'Status:':<18}\033[0m{_status_color}{current_status}\033[0m")
             _sections.append(("RESERVATION", _res_rows))
         _print_boxed("CURRENT RECORD", _sections)
         if _res_expired:
@@ -5684,7 +6174,6 @@ def manage_reservation():
 
         if ask_yes_no("Is this the correct unit?"):
             break
-        print()
 
     # Branch: Available → Reserved
     if current_status == "Available":
@@ -5751,34 +6240,42 @@ def manage_reservation():
         _res_color = get_status_color("Reserved")
         _av_color  = get_status_color("Available")
 
-        _reserver_rows = [f"  {'Reserver:':<18}{reserver_name}"]
+        _reserver_rows = [f"  \033[1m{'Reserver:':<18}\033[0m{reserver_name}"]
         if _existing_customer:
             if reserver_phone:
-                _reserver_rows.append(f"  {'Phone:':<18}{reserver_phone}")
+                _reserver_rows.append(f"  \033[1m{'Phone:':<18}\033[0m{reserver_phone}")
             if reserver_email:
-                _reserver_rows.append(f"  {'Email:':<18}{reserver_email}")
+                _reserver_rows.append(f"  \033[1m{'Email:':<18}\033[0m{reserver_email}")
         elif reserver_phone:
-            _reserver_rows.append(f"  {'Contact:':<18}{reserver_phone}")
+            _reserver_rows.append(f"  \033[1m{'Contact:':<18}\033[0m{reserver_phone}")
 
         _action_rows = [
-            f"  {'Reserved Date:':<18}{reserved_date_str}",
-            f"  {'Status:':<18}{_av_color}Available\033[0m  →  {_res_color}Reserved\033[0m",
+            f"  \033[1m{'Reserved Date:':<18}\033[0m{reserved_date_str}",
+            f"  \033[1m{'Status:':<18}\033[0m{_av_color}Available\033[0m  →  {_res_color}Reserved\033[0m",
         ]
         if reservation_context:
             _note_lines = textwrap.wrap(reservation_context, width=30)
-            _action_rows.append(f"  {'Note:':<18}{_note_lines[0]}")
+            _action_rows.append(f"  \033[1m{'Note:':<18}\033[0m{_note_lines[0]}")
             for _nl in _note_lines[1:]:
                 _action_rows.append(f"  {'': <18}{_nl}")
 
+        # Computed here (rather than at write time) so the box can show the
+        # exact [MM-DD-YYYY · TAG] line(s) that will be appended to
+        # Inventory Notes -- not a preview that drifts from what's actually saved.
+        _new_note_lines = [reservation_note]
+        if reservation_context:
+            _new_note_lines.append(f"[{reserved_date_str} · RSVP] {reservation_context}")
+
         _print_boxed("RESERVATION SUMMARY", [
             ("UNIT", [
-                f"  {'SKU:':<18}{sku}",
-                f"  {'Weave Type:':<18}{row['Weave Type / Cluster']}",
-                f"  {'Supplier:':<18}{row['Supplier']}",
-                f"  {'Selling Price:':<18}{selling_price_fmt}",
+                f"  \033[1m{'SKU:':<18}\033[0m{sku}",
+                f"  \033[1m{'Weave Type:':<18}\033[0m{row['Weave Type / Cluster']}",
+                f"  \033[1m{'Supplier:':<18}\033[0m{row['Supplier']}",
+                f"  \033[1m{'Selling Price:':<18}\033[0m{selling_price_fmt}",
             ]),
             ("RESERVER", _reserver_rows),
             ("ACTION", _action_rows),
+            ("NOTES", _notes_section_rows(*_new_note_lines)),
         ])
 
         confirmed = ask_yes_no("Mark this unit as Reserved?")
@@ -5788,17 +6285,13 @@ def manage_reservation():
 
         if not _status_unchanged(row_index, current_status):
             _warn(f"This unit's status has changed since you started (no longer '{current_status}'). "
-                  f"Someone else may have just updated it — nothing was written. Please re-check the SKU.")
+                  f"Another user may have just updated it — nothing was written. Please re-check the SKU.")
             return
-
-        _new_note_lines = [reservation_note]
-        if reservation_context:
-            _new_note_lines.append(f"[{reserved_date_str} · RSVP] {reservation_context}")
 
         update_row(row_index, {
             "Status":          "Reserved",
             "Reserved Date":   reserved_date_str,
-            "Inventory Notes": _fresh_notes_append(row_index, "Inventory Notes", _new_note_lines),
+            "Inventory Notes": _normalize_inventory_notes(_fresh_notes_append(row_index, "Inventory Notes", _new_note_lines)),
         })
         print(f"\n\033[38;5;202m✓ {sku} reserved for {reserver_name}.\033[0m")
 
@@ -5830,27 +6323,35 @@ def manage_reservation():
         release_note = ask_text("Release note (press Enter to skip):", required=False)
 
         _release_action_rows = [
-            f"  {'Reserved Date:':<18}{reserved_date_display}",
-            f"  {'Status:':<18}{_res_color}Reserved\033[0m  →  {_av_color}Available\033[0m",
+            f"  \033[1m{'Reserved Date:':<18}\033[0m{reserved_date_display}",
+            f"  \033[1m{'Status:':<18}\033[0m{_res_color}Reserved\033[0m  →  {_av_color}Available\033[0m",
         ]
         if release_note:
             _rn_lines = textwrap.wrap(release_note, width=30)
-            _release_action_rows.append(f"  {'Note:':<18}{_rn_lines[0]}")
+            _release_action_rows.append(f"  \033[1m{'Note:':<18}\033[0m{_rn_lines[0]}")
             for _rn in _rn_lines[1:]:
                 _release_action_rows.append(f"  {'': <18}{_rn}")
 
+        # Computed here (rather than at write time) so the box can show the
+        # exact [MM-DD-YYYY · RELEASE] line that will be appended to
+        # Inventory Notes -- not a preview that drifts from what's actually saved.
+        today_str    = date.today().strftime("%m-%d-%Y")
+        _note_clause = f" {release_note}" if release_note else ""
+        _release_tag = f"[{today_str} · RELEASE] Reservation released.{_note_clause}"
+
         _print_boxed("RELEASE RESERVATION SUMMARY", [
             ("UNIT", [
-                f"  {'SKU:':<18}{sku}",
-                f"  {'Weave Type:':<18}{row['Weave Type / Cluster']}",
-                f"  {'Supplier:':<18}{row['Supplier']}",
-                f"  {'Selling Price:':<18}{selling_price_fmt}",
+                f"  \033[1m{'SKU:':<18}\033[0m{sku}",
+                f"  \033[1m{'Weave Type:':<18}\033[0m{row['Weave Type / Cluster']}",
+                f"  \033[1m{'Supplier:':<18}\033[0m{row['Supplier']}",
+                f"  \033[1m{'Selling Price:':<18}\033[0m{selling_price_fmt}",
             ]),
             ("RESERVER", [
-                f"  {'Reserver:':<18}{reserver_name_display}",
-                f"  {'Contact:':<18}{reserver_contact_display}",
+                f"  \033[1m{'Reserver:':<18}\033[0m{reserver_name_display}",
+                f"  \033[1m{'Contact:':<18}\033[0m{reserver_contact_display}",
             ]),
             ("ACTION", _release_action_rows),
+            ("NOTES", _notes_section_rows(_release_tag)),
         ])
 
         confirmed = ask_yes_no("Release this reservation?")
@@ -5858,13 +6359,9 @@ def manage_reservation():
             print("\nRelease cancelled. Returning to Main Menu.")
             return
 
-        today_str    = date.today().strftime("%m-%d-%Y")
-        _note_clause = f" {release_note}" if release_note else ""
-        _release_tag = f"[{today_str} · RELEASE] Reservation released.{_note_clause}"
-
         if not _status_unchanged(row_index, current_status):
             _warn(f"This unit's status has changed since you started (no longer '{current_status}'). "
-                  f"Someone else may have just updated it — nothing was written. Please re-check the SKU.")
+                  f"Another user may have just updated it — nothing was written. Please re-check the SKU.")
             return
 
         # Re-strip against a fresh read, not the Step-1 snapshot's
@@ -5876,7 +6373,7 @@ def manage_reservation():
         update_row(row_index, {
             "Status":          "Available",
             "Reserved Date":   "",
-            "Inventory Notes": final_notes,
+            "Inventory Notes": _normalize_inventory_notes(final_notes),
         })
         print(f"\n\033[38;5;202m✓ {sku} reservation released. Unit restored to Available.\033[0m")
 
@@ -5890,9 +6387,9 @@ def _pick_report_year(today, years, prompt="Select a year:"):
     the whole flow."""
     print()
     choice = questionary.select(
-        prompt,
+        "",
         choices=[str(yr) for yr in years] + [questionary.Separator(" "), _back_choice()],
-        qmark="", instruction=" ", style=_MENU_STYLE,
+        qmark=prompt, instruction=" ", style=_MENU_STYLE,
     ).unsafe_ask()
     if choice is None or choice == "Back":
         return None
@@ -5920,9 +6417,9 @@ def _pick_monthly_period(today, _cal):
         month_labels = [date(yr, mo, 1).strftime("%B") for mo in range(1, last_month + 1)]
         print()
         choice = questionary.select(
-            f"Select a month in {yr}:",
+            "",
             choices=month_labels + [questionary.Separator(" "), _back_choice()],
-            qmark="", instruction=" ", style=_MENU_STYLE,
+            qmark=f"Select a month in {yr}:", instruction=" ", style=_MENU_STYLE,
         ).unsafe_ask()
         if choice is None or choice == "Back":
             continue
@@ -5949,9 +6446,9 @@ def _pick_quarterly_period(today, _cal):
         quarter_labels = [f"Q{q}" for q in range(1, last_q + 1)]
         print()
         choice = questionary.select(
-            f"Select a quarter in {yr}:",
+            "",
             choices=quarter_labels + [questionary.Separator(" "), _back_choice()],
-            qmark="", instruction=" ", style=_MENU_STYLE,
+            qmark=f"Select a quarter in {yr}:", instruction=" ", style=_MENU_STYLE,
         ).unsafe_ask()
         if choice is None or choice == "Back":
             continue
@@ -6087,14 +6584,14 @@ def _print_customer_insights(customer, all_rows, ptype, start, end, label):
     sections = [
         ("SPEND", [
             f"  {spend_label:<28}${total_spend:,.2f}",
-            f"  {'Gross Profit:':<28}${total_gp:,.2f}",
-            f"  {'Total Discount Given:':<28}{discount_display}",
-            f"  {'Average Order Value:':<28}${aov:,.2f}",
-            f"  {'Units Purchased:':<28}{units}",
+            f"  \033[1m{'Gross Profit:':<28}\033[0m${total_gp:,.2f}",
+            f"  \033[1m{'Total Discount Given:':<28}\033[0m{discount_display}",
+            f"  \033[1m{'Average Order Value:':<28}\033[0m${aov:,.2f}",
+            f"  \033[1m{'Units Purchased:':<28}\033[0m{units}",
         ]),
         ("BUSINESS CONTRIBUTION", [
-            f"  {'Revenue Share:':<28}{revenue_share:.1f}%",
-            f"  {'Gross Profit Share:':<28}{gp_share:.1f}%",
+            f"  \033[1m{'Revenue Share:':<28}\033[0m{revenue_share:.1f}%",
+            f"  \033[1m{'Gross Profit Share:':<28}\033[0m{gp_share:.1f}%",
         ]),
     ]
 
@@ -6140,17 +6637,17 @@ def _print_customer_insights(customer, all_rows, ptype, start, end, label):
         # already hides its own Sales Channel breakdown under the same
         # low-coverage condition. It'll appear naturally once real data
         # exists.
-        prefs_rows = [f"  {'Weave Type:':<28}{weave_display}"]
+        prefs_rows = [f"  \033[1m{'Weave Type:':<28}\033[0m{weave_display}"]
         if channel_tally:
             top_channel = max(channel_tally, key=channel_tally.get)
             channel_display = f"{top_channel} ({channel_tally[top_channel] / units * 100:.0f}%)"
-            prefs_rows.append(f"  {'Sales Channel:':<28}{channel_display}")
+            prefs_rows.append(f"  \033[1m{'Sales Channel:':<28}\033[0m{channel_display}")
         sections.append(("PREFERENCES", prefs_rows))
         sections.append(("RECENCY", [
-            f"  {'Date of First Purchase:':<28}{first_display}",
-            f"  {'Date of Last Purchase:':<28}{last_display}",
-            f"  {'Days Since Last Purchase:':<28}{recency_display}",
-            f"  {'Avg Days Between Purchases:':<28}{avg_between_display}",
+            f"  \033[1m{'Date of First Purchase:':<28}\033[0m{first_display}",
+            f"  \033[1m{'Date of Last Purchase:':<28}\033[0m{last_display}",
+            f"  \033[1m{'Days Since Last Purchase:':<28}\033[0m{recency_display}",
+            f"  \033[1m{'Avg Days Between Purchases:':<28}\033[0m{avg_between_display}",
         ]))
 
     _print_boxed(f"PURCHASE SUMMARY — {label.upper()}", sections)
@@ -6209,8 +6706,12 @@ def _print_customer_insights(customer, all_rows, ptype, start, end, label):
                 dc  = _out_days_color(d)
                 print(f"  {sku:<16}${amt:<15,.2f}{dc}{_out_days_display(d)}\033[0m")
             _ofooter = f"Units Outstanding: {len(outstanding_sorted)} | Amount Outstanding: ${total_outstanding:,.2f}"
+            _ofooter = _ofooter.center(50)  # center on the plain text first -- see note
+            # on the identical _footer pattern above for why bold must be added after
+            _ofooter = (_ofooter.replace("Units Outstanding:", "\033[1mUnits Outstanding:\033[0m")
+                                 .replace("Amount Outstanding:", "\033[1mAmount Outstanding:\033[0m"))
             print(_oeq)
-            print(_ofooter.center(50))
+            print(_ofooter)
             print(_oeq)
 
     ordered = sorted(
@@ -6252,11 +6753,11 @@ def _pick_customer_period():
     today = date.today()
     print()
     period_choice = questionary.select(
-        "Select a period type:",
+        "",
         choices=["Monthly", "Quarterly", "Annual", "Custom",
                  questionary.Separator(" "),
                  _back_choice()],
-        qmark="", instruction=" ", style=_MENU_STYLE,
+        qmark="Select a period type:", instruction=" ", style=_MENU_STYLE,
     ).unsafe_ask()
     if period_choice is None or period_choice == "Back":
         return None
@@ -6347,11 +6848,11 @@ def generate_report_menu():
     while True:
         print()
         period_choice = questionary.select(
-            "Select a period type:",
+            "",
             choices=["Monthly", "Quarterly", "Annual", "Custom",
                      questionary.Separator(" "),
                      _back_choice("Return to Main Menu")],
-            qmark="",
+            qmark="Select a period type:",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
@@ -6398,6 +6899,978 @@ def generate_report_menu():
         return
 
 
+_DESC_WRAP_WIDTH = 70
+
+def _wrap_numbered_list(text, width=_DESC_WRAP_WIDTH):
+    """Wrap a Claude-generated numbered list (one logical item per line,
+    however long) to a fixed width with a hanging indent, and a blank line
+    between items -- _print_boxed() has no wrapping of its own, so a long
+    unwrapped line just overflows the box border instead of being contained
+    by it."""
+    items = re.split(r"\n(?=\d+\.\s)", text.strip())
+    lines = []
+    for i, item in enumerate(items):
+        item = " ".join(item.split())   # collapse any pre-existing wrapping first
+        lines.extend(textwrap.wrap(item, width=width, subsequent_indent="   "))
+        if i != len(items) - 1:
+            lines.append("")
+    return lines
+
+def _wrap_text_block(text, width=_DESC_WRAP_WIDTH):
+    """Wrap each line of a block of text independently, preserving existing
+    blank-line paragraph breaks and bullet-list line breaks (e.g. Shopify's
+    narrative-paragraph-then-bullet-list format) instead of merging
+    everything into one run-on paragraph. A bullet line's wrapped
+    continuation is hung under the text after its "- " marker (matching
+    _wrap_numbered_list()'s own hanging indent for numbered items), so it
+    still reads as part of that bullet rather than a new, unmarked line --
+    a narrative paragraph line isn't an itemized point, so it gets no
+    hanging indent."""
+    lines = []
+    for raw_line in text.split("\n"):
+        if not raw_line.strip():
+            lines.append("")
+            continue
+        _bullet = re.match(r"^-\s+", raw_line)
+        _indent = " " * len(_bullet.group()) if _bullet else ""
+        lines.extend(textwrap.wrap(raw_line, width=width, subsequent_indent=_indent))
+    return lines
+
+def generate_product_description():
+    try:
+        import importlib
+        import description_generator as dg
+        importlib.reload(dg)   # always run the latest version on disk
+    except Exception as e:
+        _warn(f"Product description generator unavailable: {e}")
+        return
+
+    print("\n--- \033[1;38;5;124mGENERATE PRODUCT DESCRIPTION\033[0m ---")
+
+    # Step 1: SKU lookup + confirmation (same shape as reprice_unit())
+    while True:
+        sku = ask_text("SKU:", blank_message="SKU cannot be left blank. Please enter a valid SKU.")
+        row_index = find_row_index_by_sku(sku)
+        if row_index is None:
+            _warn(f"SKU '{sku}' was not found in the master sheet. Please check the SKU and try again.")
+            continue
+
+        row = get_row_by_sheet_index(row_index)
+        current_status = row.get("Status", "").strip()
+
+        # A description can't be generated for something already sold (risks
+        # drawing a new inquiry for a piece that can't be fulfilled), not yet
+        # a confirmed listing, or already Reserved -- whatever conversation
+        # led to the hold has already happened, so a description generated
+        # now can't help close it. If a genuine need for a Reserved-unit
+        # description ever comes up in practice, revisit this then rather
+        # than building for a use case that isn't confirmed real.
+        if current_status in ("Sold", "Sold - Partial Payment", "Unassigned", "Reserved"):
+            _warn(f"SKU '{sku}' has status '{current_status}'. A description can't be generated "
+                  f"for a unit that's already sold, reserved, or not yet a confirmed listing.")
+            continue
+
+        weave_type = row.get("Weave Type / Cluster", "").strip()
+        hero = _is_hero_weave(weave_type)
+
+        days_in_inv = row.get("Days in Inventory", "")
+        # Grouped by what the fields actually are, not by matching another
+        # operation's section names: IDENTITY is "what is this unit"
+        # (SKU/Weave Type/Tier all answer that same question), SOURCING &
+        # AGING is "where it came from and how long it's sat" (a genuinely
+        # different question), COMMERCIAL is its current business-facing
+        # state (price + status). A subheader earns its place from the
+        # fields under it, not from reprice_unit()'s own CURRENT RECORD
+        # box using different labels -- see D-388.
+        _print_boxed("CURRENT RECORD", [
+            ("IDENTITY", [
+                f"  \033[1m{'SKU:':<20}\033[0m{row['SKU']}",
+                f"  \033[1m{'Weave Type:':<20}\033[0m{row.get('Category Code', '')} - {weave_type}",
+                f"  \033[1m{'Tier:':<20}\033[0m{'Hero' if hero else 'Supplemental'}",
+            ]),
+            ("SOURCING & AGING", [
+                f"  \033[1m{'Supplier:':<20}\033[0m{row.get('Supplier', '')}",
+                f"  \033[1m{'Days in Inventory:':<20}\033[0m{days_in_inv}",
+            ]),
+            ("COMMERCIAL", [
+                f"  \033[1m{'Selling Price:':<20}\033[0m${_sheet_float(row.get('Selling Price (USD)', 0)):,.2f}",
+                f"  \033[1m{'Status:':<20}\033[0m{current_status}",
+            ]),
+        ])
+        if ask_yes_no("Is this the correct unit?"):
+            break
+
+    original_row = row   # snapshot for the concurrency check before writing later
+
+    # Step 2: channel selection -- one at a time, matching every other
+    # operation's single-locus-of-attention shape. Wanting a second channel
+    # for the same unit just means running this operation again and picking
+    # it that time; merge_description() at write time keeps both. Asked
+    # right after unit confirmation, before photos/notes -- both are
+    # channel-agnostic (the same photo_paths and notes feed whichever
+    # channel is picked), so nothing downstream depends on this happening
+    # last, and discovering a channel's already done (and not worth
+    # regenerating), or backing out of the operation entirely, happens
+    # before any of that work is done instead of after it.
+    # Existing content is shown per channel before she commits, the same
+    # "here's what's there now" moment reprice_unit() and Edit Inventory
+    # Details already give her before letting a change happen -- without
+    # it, picking a channel that already has content (possibly already
+    # live on a real post) would walk her straight into regenerating it
+    # with merge_description() silently overwriting the old text on write.
+    existing_descs = dg.parse_existing_descriptions(row.get("Generated Descriptions", ""))
+    print()
+    _regenerating_text = None  # set below if she confirms regenerating a channel
+                                # that already has a saved caption -- lets Step 5
+                                # revise that existing text instead of discarding
+                                # it and starting from nothing
+    while True:
+        def _channel_label(name, key):
+            if key in existing_descs:
+                return f"{name} (updated {existing_descs[key][0]})"
+            return name
+
+        # A per-channel "(no description yet)" suffix on every missing
+        # channel just repeats the same fact three times at the same visual
+        # weight as the channel names themselves -- one dim summary line
+        # says it once instead.
+        _have    = [n for n in ("Instagram", "Shopify", "WhatsApp") if n.upper() in existing_descs]
+        _missing = [n for n in ("Instagram", "Shopify", "WhatsApp") if n.upper() not in existing_descs]
+        if not _have:
+            print("\033[2mNo description has been generated for any channel yet.\033[0m")
+        elif _missing:
+            _have_str    = " and ".join(_have)
+            _missing_str = (f"{_missing[0]} doesn't have one yet." if len(_missing) == 1
+                             else f"{' and '.join(_missing)} don't have one yet.")
+            print(f"\033[2mDescription{'s' if len(_have) > 1 else ''} generated for {_have_str}. {_missing_str}\033[0m")
+        print()
+
+        channel = questionary.select(
+            "",
+            choices=[
+                questionary.Choice(_channel_label("Instagram", "INSTAGRAM"), value="instagram"),
+                questionary.Choice(_channel_label("Shopify", "SHOPIFY"), value="shopify"),
+                questionary.Choice(_channel_label("WhatsApp", "WHATSAPP"), value="whatsapp"),
+                questionary.Separator(" "),
+                _back_choice("Return to Main Menu"),
+            ],
+            qmark="Which channel is this for?",
+            style=_MENU_STYLE,
+        ).unsafe_ask()
+        if channel is None or channel == "Return to Main Menu":
+            print("\nCancelled. Returning to Main Menu.")
+            return
+
+        existing = existing_descs.get(channel.upper())
+        if existing is None:
+            break
+        stamp, body = existing
+        _print_boxed(f"CURRENT {channel.upper()} DESCRIPTION", [
+            ("LAST UPDATED " + stamp, _wrap_text_block(body)),
+        ])
+        if ask_yes_no("Regenerate and replace this?"):
+            _regenerating_text = body
+            break
+        print()
+
+    # Step 3: optional photos -- collected before her notes so she has the
+    # piece in front of her (visually) while writing about it, rather than
+    # describing it from memory and only then reaching for photos.
+    photo_paths = []
+    if ask_yes_no("Attach photos for this unit? (whole-unit shot, close-ups)"):
+        while True:
+            # Only the first round explains how -- once she's already
+            # dragged one in, repeating the full instructions every loop
+            # reads as redundant. Later rounds just ask if there's more.
+            # "Leave blank to finish" rather than "press Enter when done" --
+            # this prompt repeats every round, and "when done" is locally
+            # ambiguous in a repeated loop (done with this one, or done with
+            # all of them?) in a way a direct action-to-outcome conditional
+            # isn't. Enter alone is still what submits either way; this only
+            # changes what tells her a blank answer is the way to stop.
+            prompt = ("Drag photos in, or type their paths "
+                      "(leave blank to finish):") if not photo_paths else \
+                     "Add more, or leave blank to finish:"
+            raw = ask_text(prompt, required=False)
+            if not raw:
+                break
+            # A dragged file's path arrives shell-escaped (e.g. "My File.png"
+            # becomes "My\ File.png"), and dragging several files at once
+            # puts every path on the same line, space-separated -- unescape
+            # and split them the same way a shell would, or a bulk drag
+            # would silently keep only the first file and drop the rest.
+            # Falls back to treating the whole line as one literal path if
+            # it isn't valid shell syntax (e.g. an unmatched quote, which a
+            # real apostrophe in a filename can trigger) -- that fallback
+            # almost never resolves to a real file, so it's flagged
+            # separately below rather than reported as a plain "not found",
+            # which would misleadingly suggest the file itself is the
+            # problem rather than how its path parsed.
+            try:
+                candidates = shlex.split(raw)
+                parse_failed = False
+            except ValueError:
+                candidates = [raw]
+                parse_failed = True
+            for path in candidates:
+                if not os.path.exists(path):
+                    if parse_failed:
+                        _warn(f"This file's name has a character this can't handle -- often "
+                              f"an apostrophe, parentheses, or an ampersand. Try renaming the "
+                              f"file to remove it, then drag it in again. Skipped.")
+                    else:
+                        _warn(f"No file found at '{path}'. Skipped.")
+                    continue
+                photo_paths.append(path)
+            print(f"\n\033[2m{len(photo_paths)} photo(s) so far.\033[0m")
+
+    # Tag photo (barcode/SKU/price) is captured separately from the photos
+    # above, on purpose -- it has real standalone value for catching a
+    # sheet-vs-tag price discrepancy later without hunting through 1,000+
+    # units on the shelf, but Claude has vision and would see whatever's in
+    # any attached photo. Keeping it out of the same list means it's never
+    # part of what gets sent to the model for generation, only stored to
+    # Drive for her own reference -- the one deliberate exception to "every
+    # attached photo goes to both."
+    tag_photo = None
+    while True:
+        tag_photo_raw = ask_text(
+            "Upload Hangtag (barcode, SKU, price -- reference only) (press Enter to skip):",
+            required=False,
+        )
+        if not tag_photo_raw:
+            break
+        try:
+            tag_photo = shlex.split(tag_photo_raw)[0]
+        except (ValueError, IndexError):
+            tag_photo = tag_photo_raw
+        if os.path.exists(tag_photo):
+            break
+        _warn(f"No file found at '{tag_photo}'. Try again, or press Enter to skip.")
+        tag_photo = None
+
+    # Step 4: her raw notes. ask_long_text(), not the plain ask_text() used
+    # elsewhere -- this field routinely receives a pasted paragraph (e.g.
+    # copied out of a terminal window that had wrapped it, which embeds a
+    # real newline at every wrap point), and ask_text()'s input() silently
+    # drops everything after a pasted answer's first line break. Still
+    # single-line/Enter-submits like every other prompt here, not the
+    # multiline (Enter-adds-a-line) mode that caused real confusion when
+    # tried before -- this only changes how a paste is captured, not the
+    # typing experience.
+    # Wording branches on whether she's regenerating -- this same answer
+    # feeds start_revision_session() as a targeted change note when
+    # _regenerating_text is set (below), not raw descriptive material for
+    # a from-scratch caption the way it does on a first-time generation,
+    # so asking her to "describe this piece" would be the wrong framing.
+    notes = ask_long_text(
+        "What would you like to change or add?" if _regenerating_text
+        else "Describe this piece (color, motif, texture, story):",
+        blank_message="Notes cannot be left blank.",
+    )
+
+    # Name/collection and technical specs (zari purity, falls/blouse
+    # construction) are entirely her own creative/sourcing knowledge -- no
+    # source of truth to check this against, so ask directly rather than
+    # hope she volunteers it above or invent it. Both optional: a lot of
+    # older or restaged units never got a formal name, and the technical
+    # specifics aren't always known at note-writing time. Each is shown and
+    # tracked independently, right before its own prompt -- a name doesn't
+    # change because zari purity got corrected, and vice versa.
+    existing_name = _get_last_description_spec(row.get("Inventory Notes", ""), "NAME/COLLECTION")
+    if existing_name:
+        print(f"\n\033[2mOn file from a previous session: {existing_name}\033[0m")
+    name_collection = ask_long_text(
+        "Name/Collection (e.g. 'Raktima Marakata -- Aalayam Collection') (press Enter to skip):",
+        required=False,
+    )
+
+    existing_tech = _get_last_description_spec(row.get("Inventory Notes", ""), "TECHNICAL SPECS")
+    if existing_tech:
+        print(f"\n\033[2mOn file from a previous session: {existing_tech}\033[0m")
+    tech_specs = ask_long_text(
+        "Technical Specs (e.g. zari purity, falls/blouse construction) (press Enter to skip):",
+        required=False,
+    )
+
+    # Shared setup used from here on: unit_facts only needs what Step 1
+    # already established, so it's built here (not at generation time)
+    # so Point 1, right below, can call on Claude for a sibling correction
+    # before this unit's own caption is ever generated. Same for the two
+    # nested helpers -- _handle_unparsed_refinement() is shared by both the
+    # sibling-sync flow and Step 7's own refinement loop further down, and
+    # _sync_sibling_caption()/_offer_sibling_sync() are shared by Point 1
+    # and Step 9, the two different moments a sibling correction can be
+    # triggered from.
+    unit_facts = (f"SKU {row['SKU']}, weave type: {weave_type}, "
+                  f"category: {row.get('Category Code', '')}, "
+                  f"tier: {'hero' if hero else 'supplemental'}, "
+                  f"selling price (USD, internal calibration only, never state this): "
+                  f"${_sheet_float(row.get('Selling Price (USD)', 0)):,.2f}, "
+                  f"days in inventory (internal calibration only, never state this "
+                  f"number -- a high count means this is aged/restaging inventory, "
+                  f"so avoid 'fresh off the loom'-style framing): "
+                  f"{row.get('Days in Inventory', '').strip() or 'unknown'}, "
+                  f"ships from: {os.environ.get('SHIP_FROM', 'USA').strip()} "
+                  f"(wherever the founder is currently located, not a fixed "
+                  f"property of this unit -- only relevant for Instagram's "
+                  f"closing line)")
+
+    def _handle_unparsed_refinement(new_text, messages, system):
+        """Called when a refinement reply doesn't parse as a version, for
+        any reason -- Claude declining a change, asking a follow-up,
+        dropping the required VERSION header, or something else entirely.
+        Rather than classifying which of those it is, this always does the
+        same simple thing: show exactly what Claude said, in a neutrally
+        titled box (not "unparsed" or "error" -- the content itself might
+        be a perfectly good answer, just missing the header our code looks
+        for), then offer one plain choice every time: try again, keep the
+        current version as it already stood, or cancel. "Refine this"
+        itself is simple -- alter the current version to match her
+        instructions without inventing anything unconfirmed -- so handling
+        a reply that doesn't fit doesn't need to be any more elaborate than
+        that either. No round cap: the main refinement loop already allows
+        unlimited "Refine this" attempts, so this doesn't need its own
+        separate limit -- she decides when to stop trying.
+
+        Returns (outcome, messages, resolved_text):
+          "version" -- resolved_text is a freshly parsed version; treat
+                       exactly like a normal successful refinement.
+          "keep"    -- nothing changed; caller re-shows the current version.
+          "cancel"  -- caller should abandon the whole operation.
+        """
+        while True:
+            _warn("That refinement came back in an unexpected format and couldn't be read "
+                  "as a version -- nothing changed. Try rephrasing the instruction.")
+            _print_boxed(None, [("CLAUDE'S REPLY", _wrap_text_block(new_text))])
+
+            action = questionary.select(
+                "",
+                choices=[
+                    "Try again",
+                    "Keep the current version",
+                    questionary.Separator(" "),
+                    _back_choice("Return to Main Menu"),
+                ],
+                qmark="How would you like to proceed?", instruction=" ", style=_MENU_STYLE,
+            ).unsafe_ask()
+
+            if action is None or action == "Return to Main Menu":
+                return "cancel", messages, None
+            if action == "Keep the current version":
+                return "keep", messages, None
+
+            answer = ask_long_text("What would you like to change? (can reference an earlier version by number)")
+            print("\n\033[2mThinking...\033[0m")
+            try:
+                messages, new_text = dg.continue_session(messages, system, answer)
+            except Exception as e:
+                _warn(f"Refinement failed: {e}")
+                return "keep", messages, None
+
+            if dg.parse_versions(new_text):
+                return "version", messages, new_text
+            # else: loop back to the top and show this new reply instead
+
+    def _sync_sibling_caption(sibling, sibling_text, correction_instruction, field_names):
+        """Runs a full patch-and-refine loop to bring one sibling
+        channel's already-saved caption in line with a corrected Name/
+        Collection or Technical Specs fact, writing the result if locked
+        in. Shared by Point 1 (a same-unit conflict caught before this
+        session's own caption is even generated) and Step 9 (a correction
+        discovered only after this session's own caption has already been
+        saved) -- same mechanism, two different moments it can fire from.
+        Returns True if a write happened, False otherwise (cancelled,
+        sync failed, or a concurrency conflict blocked it)."""
+        sibling_channel = sibling.lower()
+        print("\n\033[2mThinking...\033[0m")
+        try:
+            _p_messages, _p_text, _p_system = dg.start_patch_session(
+                unit_facts, weave_type, sibling_channel, sibling_text, correction_instruction
+            )
+        except Exception as e:
+            _warn(f"Sync failed: {e}")
+            return False
+
+        _p_version_num = 1
+        while True:
+            _p_versions = dg.parse_versions(_p_text)
+            for _p_name, _p_body in _p_versions.items():
+                _p_leak = dg.find_price_leak(_p_body)
+                if _p_leak:
+                    _warn(f"{_p_name} appears to state a price ('{_p_leak}') -- this should "
+                          f"never happen. Please refine before locking this in.")
+                _p_overused = dg.find_overused_phrasing(_p_body)
+                if _p_overused:
+                    _warn(f"{_p_name} uses '{_p_overused}' -- one of the generic phrases the "
+                          f"reference captions reuse across different pieces. Consider "
+                          f"refining for something more specific to this unit.")
+                _p_mismatch = dg.find_sku_mismatch(_p_body, sku)
+                if _p_mismatch:
+                    _warn(f"{_p_name} states SKU '{_p_mismatch}', not the confirmed unit's SKU "
+                          f"('{sku}') -- this should never happen. Please refine before "
+                          f"locking this in.")
+            _p_note = dg.extract_preamble_note(_p_text)
+            if _p_note:
+                _print_boxed(None, [("NOTE FROM GENERATION", _wrap_text_block(_p_note))])
+            _print_boxed(f"{sibling} VERSION {_p_version_num}", [
+                (_p_name, _wrap_text_block(_p_body)) for _p_name, _p_body in _p_versions.items()
+            ])
+            print()
+            _p_action = questionary.select(
+                "",
+                choices=[
+                    "Refine this",
+                    "Lock this in",
+                    questionary.Separator(" "),
+                    _back_choice("Return to Main Menu"),
+                ],
+                qmark=f"What next? (Version {_p_version_num} -- refining again uses another API call)", instruction=" ", style=_MENU_STYLE,
+            ).unsafe_ask()
+            if _p_action is None or _p_action == "Return to Main Menu":
+                print(f"\n{sibling.capitalize()} sync cancelled. Nothing changed for that channel.")
+                return False
+            if _p_action == "Lock this in":
+                _p_final_versions = dg.parse_versions(_p_text)
+                _p_generated_text = next(iter(_p_final_versions.values()), "")
+                # Fresh read taken right here, immediately before this
+                # specific write -- not a single baseline shared across
+                # every sibling in the same _offer_sibling_sync() call, which
+                # would falsely flag a conflict on the second sibling onward
+                # (its own baseline would already be stale the moment the
+                # first sibling's write landed, since that write itself
+                # changes Generated Descriptions -- not a concurrent user,
+                # but the check couldn't tell the difference).
+                _p_baseline_row = get_row_by_sheet_index(row_index)
+                _p_unchanged, _p_conflict_col = _row_fields_unchanged(
+                    row_index, _p_baseline_row, {"Generated Descriptions"}
+                )
+                if not _p_unchanged:
+                    _warn(f"This unit's '{_p_conflict_col}' has changed since you started — another "
+                          f"user may have just updated it. Nothing was written for {sibling.capitalize()} "
+                          f"-- please re-run and try again.")
+                    return False
+                _p_combined = dg.merge_description(
+                    get_row_by_sheet_index(row_index).get("Generated Descriptions", ""),
+                    sibling_channel, _p_generated_text,
+                )
+                update_row(row_index, {"Generated Descriptions": _p_combined})
+                # Kept in sync with what was actually just written -- existing_descs
+                # is only ever read from once, at Step 2, and every sibling sync
+                # (offered only from Step 9) pulls its starting text from it. Without
+                # this, correcting the same sibling a second time later in this same
+                # session would seed the new patch from the original pre-correction
+                # text still sitting here, silently discarding the first fix.
+                existing_descs[sibling] = (date.today().strftime("%m-%d-%Y"), _p_generated_text.strip())
+                print(f"\n\033[38;5;202m✓ {sku} — {sibling.capitalize()} description updated "
+                      f"to reflect the current {field_names}.\033[0m")
+                return True
+            _p_feedback = ask_long_text("What would you like to change? (can reference an earlier version by number)")
+            print("\n\033[2mThinking...\033[0m")
+            try:
+                _p_messages, _p_new_text = dg.continue_session(_p_messages, _p_system, _p_feedback)
+            except Exception as e:
+                _warn(f"Refinement failed: {e}")
+                continue
+            if not dg.parse_versions(_p_new_text):
+                _p_outcome, _p_messages, _p_resolved_text = _handle_unparsed_refinement(_p_new_text, _p_messages, _p_system)
+                if _p_outcome == "cancel":
+                    print(f"\n{sibling.capitalize()} sync cancelled. Nothing changed for that channel.")
+                    return False
+                if _p_outcome == "version":
+                    _p_text = _p_resolved_text
+                    _p_version_num += 1
+                continue
+            _p_text = _p_new_text
+            _p_version_num += 1
+
+    def _offer_sibling_sync(changed_fields):
+        """Offers to patch every OTHER channel's already-saved caption
+        (besides the one currently being generated) so it reflects a
+        Name/Collection or Technical Specs correction, given as a list of
+        (field_name, old_value, new_value) tuples. Returns the set of
+        sibling channel keys actually synced."""
+        if not changed_fields:
+            return set()
+        field_names = " and ".join(f for f, _, _ in changed_fields)
+        correction_instruction = "Update this caption so it reflects: " + "; ".join(
+            f"{f} is now '{new}' (was '{old}')" for f, old, new in changed_fields
+        ) + "."
+        synced = set()
+        for sibling in [c for c in existing_descs if c != channel.upper()]:
+            _sibling_stamp, _sibling_text = existing_descs[sibling]
+            if not ask_yes_no(f"{sibling.capitalize()}'s existing description may still reference "
+                               f"the old {field_names}. Update it now?"):
+                continue
+            if _sync_sibling_caption(sibling, _sibling_text, correction_instruction, field_names):
+                synced.add(sibling)
+        return synced
+
+    # Point 1: catch a conflict between this session's Name/Collection or
+    # Technical Specs answer and what's already recorded in Inventory Notes
+    # for this unit, before generating anything. Her own data entry is
+    # demonstrably inconsistent across sessions -- a newer answer isn't
+    # automatically the correct one just because it's newer -- so this
+    # surfaces the conflict directly and lets her decide, rather than
+    # assuming recency. Resolving it here means whichever value is chosen
+    # is what the caption actually gets generated from, not something
+    # patched in after the fact. Only checked when a genuine on-file value
+    # exists to conflict with; a first-time answer has nothing to compare
+    # against. Purely local to this channel's own generation -- it does not
+    # touch any sibling caption. Any sibling that may need to reflect this
+    # resolution (or any later drift, e.g. a refinement that changes the
+    # name after this point already passed clean) is caught in exactly one
+    # place: Step 9, after this channel's own caption is fully generated,
+    # refined, and written -- not here, before the primary task has even
+    # started.
+    for _field, _existing in (("Name/Collection", existing_name), ("Technical Specs", existing_tech)):
+        _session_answer = name_collection if _field == "Name/Collection" else tech_specs
+        if not (_existing and _session_answer and _existing != _session_answer):
+            continue
+        _label_w = 16
+        # Name/Collection is left unwrapped, one line per value --
+        # _print_boxed()'s own dynamic width sizing grows the border to
+        # fit whichever value is longer, rather than forcing a fixed wrap
+        # width that splits a short, title-like value across two lines.
+        # Technical Specs answers routinely run to full sentences though,
+        # so left unwrapped the box would stretch far wider than every
+        # other summary table in the app -- wrapped at 50 instead, wide
+        # enough to read like natural paragraph wrapping rather than a
+        # narrow, choppy column, while still fitting an 80-column terminal.
+        _mismatch_rows = []
+        for _row_label, _value in (("On file:", _existing), ("This session:", _session_answer)):
+            if _field == "Technical Specs":
+                _lines = textwrap.wrap(_value, width=50) or [""]
+            else:
+                _lines = [_value]
+            _mismatch_rows.append(f"  \033[1m{_row_label:<{_label_w}}\033[0m{_lines[0]}")
+            for _l in _lines[1:]:
+                _mismatch_rows.append(f"  {'':<{_label_w}}{_l}")
+        _print_boxed(None, [("POSSIBLE MISMATCH", _mismatch_rows)])
+        _resolution = questionary.select(
+            "",
+            choices=["Keep this session's answer", "Use what's already on file"],
+            qmark=f"Which {_field} is actually correct for this unit?",
+            instruction=" ", style=_MENU_STYLE,
+        ).unsafe_ask()
+        if _resolution == "Use what's already on file":
+            if _field == "Name/Collection":
+                name_collection = _existing
+            else:
+                tech_specs = _existing
+
+    if name_collection:
+        notes += f"\n\nName/Collection: {name_collection}"
+    if tech_specs:
+        notes += f"\n\nTechnical details: {tech_specs}"
+
+    # Step 5: start the generation session (a real multi-turn conversation,
+    # not one-shot -- messages/system get threaded through every step below).
+    # Regenerating a channel that already has a saved caption revises that
+    # existing text instead of discarding it and starting from nothing --
+    # same underlying mechanism already used to correct a sibling channel
+    # (Point 1 / Step 9), just pointed at this channel's own prior content
+    # this time. A first-time generation for this channel still starts
+    # from her raw notes exactly as before.
+    print("\n\033[2mThinking...\033[0m")
+    try:
+        if _regenerating_text:
+            messages, text, system = dg.start_revision_session(
+                unit_facts, weave_type, channel, _regenerating_text, notes, photo_paths
+            )
+        else:
+            messages, text, system = dg.start_session(unit_facts, weave_type, notes, channel, photo_paths)
+    except Exception as e:
+        _warn(f"Description generation failed: {e}")
+        return
+
+    # Step 6: completeness loop -- her own override always wins.
+    # A response counts as done once it either says so explicitly
+    # (COMPLETENESS: sufficient) or has actually produced a VERSION block --
+    # the "Generate anyway, as-is" override tells Claude to skip the
+    # completeness check entirely and go straight to VERSION 1, so that
+    # response never contains a COMPLETENESS line at all. Checking
+    # sufficient alone would misread that as still-incomplete and loop
+    # the menu forever even though a real description already exists.
+    MAX_COMPLETENESS_ROUNDS = 2  # rounds of "Answer these now" before generating
+                                  # with what's there regardless -- more abstract
+                                  # Q&A rounds cost more time than just seeing a
+                                  # draft and refining it, which is what Step 7
+                                  # right after this is for
+    completeness_round = 0
+    while True:
+        sufficient, missing, questions = dg.parse_completeness(text)
+        if sufficient or dg.parse_versions(text):
+            if sufficient:
+                print("\n\033[2m✓ Completeness check: sufficient -- generating a draft.\033[0m")
+            break
+        completeness_round += 1
+
+        if not questions.strip():
+            # Claude's response didn't declare itself sufficient but also
+            # didn't return any follow-up questions -- an unexpected format
+            # for this response, not a real "here's round N" case. Looping
+            # on the normal menu here would show an empty box and ask "how
+            # would you like to proceed?" with nothing to answer, so this
+            # is surfaced explicitly instead and treated like the
+            # round-limit case below (generate with what's here).
+            _warn("Completeness check came back insufficient but without any follow-up "
+                  "questions -- an unexpected response format. Generating a draft with what's "
+                  "here instead of looping with nothing to show.")
+            action = "Generate anyway, as-is"
+        else:
+            print("\n\033[2m✗ Completeness check: insufficient -- a few more details would help.\033[0m")
+            _print_boxed(None, [("A FEW THINGS WOULD HELP", _wrap_numbered_list(questions))])
+            if completeness_round > MAX_COMPLETENESS_ROUNDS:
+                print(f"\n\033[2mThat's {completeness_round - 1} rounds of follow-up questions -- "
+                      f"generating a draft with what's here now. Anything still missing can be "
+                      f"added during refinement, once there's an actual description to react to.\033[0m")
+                action = "Generate anyway, as-is"
+            else:
+                action = questionary.select(
+                    "",
+                    choices=[
+                        "Answer these now",
+                        "Generate anyway, as-is",
+                        questionary.Separator(" "),
+                        _back_choice("Return to Main Menu"),
+                    ],
+                    qmark="How would you like to proceed?", style=_MENU_STYLE,
+                ).unsafe_ask()
+        if action is None or action == "Return to Main Menu":
+            print("\nCancelled. Returning to Main Menu.")
+            return
+        if action == "Generate anyway, as-is":
+            next_input = ("Generate anyway with what's here -- generalize or omit what's "
+                          "missing, do not invent it. Skip the completeness check and go "
+                          "straight to VERSION 1.")
+        else:
+            next_input = ask_long_text("Your answer(s):", blank_message="Please enter an answer, or choose a different option above.")
+        print("\n\033[2mThinking...\033[0m")
+        try:
+            messages, text = dg.continue_session(messages, system, next_input)
+        except Exception as e:
+            _warn(f"Description generation failed: {e}")
+            return
+
+    # Step 7: refinement loop
+    version_num = 1
+    while True:
+        versions = dg.parse_versions(text)
+        # Structural backstop, not just the prompt-level instruction telling
+        # the model never to state a price -- that's best-effort compliance
+        # from a language model, not a guarantee. This is a real scan of the
+        # actual generated text for a currency symbol or code next to a
+        # digit, flagged clearly before she can lock anything in.
+        for name, body in versions.items():
+            leak = dg.find_price_leak(body)
+            if leak:
+                _warn(f"{name} appears to state a price ('{leak}') -- this should "
+                      f"never happen. Please refine before locking this in.")
+            overused = dg.find_overused_phrasing(body)
+            if overused:
+                _warn(f"{name} uses '{overused}' -- one of the generic phrases the "
+                      f"reference captions reuse across different pieces. Consider "
+                      f"refining for something more specific to this unit.")
+            mismatch = dg.find_sku_mismatch(body, sku)
+            if mismatch:
+                _warn(f"{name} states SKU '{mismatch}', not the confirmed unit's SKU "
+                      f"('{sku}') -- this should never happen. Please refine before "
+                      f"locking this in.")
+        # Claude sometimes declines part of a refinement (a locked-fact change --
+        # SKU, weave type, tier, supplier, status) or complies while flagging a
+        # conflict (ships-from, name/collection, technical specs). Either way it's
+        # written as a note before the VERSION line, per the system prompt -- surface
+        # it here, since it's easy to miss otherwise: the request still went through
+        # from her side, so silence would read as "nothing unusual happened."
+        note = dg.extract_preamble_note(text)
+        if note:
+            _print_boxed(None, [("NOTE FROM GENERATION", _wrap_text_block(note))])
+        _version_mode = "REGENERATION" if _regenerating_text else "ORIGINAL GENERATION"
+        _print_boxed(f"VERSION {version_num} — {_version_mode}", [
+            (name, _wrap_text_block(body)) for name, body in versions.items()
+        ])
+        print()
+        action = questionary.select(
+            "",
+            choices=[
+                "Refine this",
+                "Lock this in",
+                questionary.Separator(" "),
+                _back_choice("Return to Main Menu"),
+            ],
+            qmark=f"What next? (Version {version_num} -- refining again uses another API call)", instruction=" ", style=_MENU_STYLE,
+        ).unsafe_ask()
+        if action is None or action == "Return to Main Menu":
+            print("\nCancelled. Nothing was written.")
+            return
+        if action == "Lock this in":
+            break
+        feedback = ask_long_text("What would you like to change? (can reference an earlier version by number)")
+        print("\n\033[2mThinking...\033[0m")
+        try:
+            messages, new_text = dg.continue_session(messages, system, feedback)
+        except Exception as e:
+            _warn(f"Refinement failed: {e}")
+            continue
+        # Claude sometimes adds a note before the VERSION block (e.g.
+        # flagging that a requested change conflicts with a known fact) --
+        # when it does, parse_versions() finds nothing, and text would
+        # otherwise silently advance to a response with no usable version
+        # in it. Step 8 below trusts `text` completely when writing to the
+        # sheet, so an unparseable response has to be caught here, not
+        # there -- by the time Step 8 runs, there's no "last known good"
+        # left to fall back to.
+        if not dg.parse_versions(new_text):
+            # Step 8 below trusts `text` completely when writing to the sheet,
+            # so an unparseable response has to be caught here, not there --
+            # by the time Step 8 runs, there's no "last known good" left to
+            # fall back to.
+            outcome, messages, resolved_text = _handle_unparsed_refinement(new_text, messages, system)
+            if outcome == "cancel":
+                print("\nCancelled. Nothing was written.")
+                return
+            if outcome == "version":
+                text = resolved_text
+                version_num += 1
+            continue
+        text = new_text
+        version_num += 1
+
+    # Step 7.5: reconfirm Name/Collection and Technical Specs against the
+    # locked caption -- both were captured once at Step 4 and never
+    # revisited since, so a correction negotiated later through
+    # conversation (a completeness follow-up, a refinement) can end up in
+    # the actual caption text without these variables ever updating to
+    # match it. There's no reliable way to parse the "true" current value
+    # back out of the caption text itself -- no structural shape for it is
+    # guaranteed by the system prompt -- so a correction, if there was one,
+    # has to be caught by her, not guessed at by the code. Gated behind a
+    # direct yes/no rather than shown unconditionally: she knows with
+    # certainty whether either field came up again after Step 4, so asking
+    # first means this adds zero friction on the (far more common) run
+    # where nothing changed. Skipped entirely if neither field was ever
+    # answered at Step 4 -- nothing there to have drifted either way.
+    if (name_collection or tech_specs) and ask_yes_no(
+        "Did the Name/Collection or Technical Specs change at all during this conversation?"
+    ):
+        _locked_versions = dg.parse_versions(text)
+        _print_boxed("LOCKED CAPTION", [
+            (name, _wrap_text_block(body)) for name, body in _locked_versions.items()
+        ])
+        # Left blank rather than pre-filled with the old value -- a stale
+        # value sitting there ready to accept with a bare Enter is exactly
+        # the kind of thing that gets rubber-stamped past without a second
+        # look, which defeats the point of asking at all. Blank means this
+        # particular field didn't change (only one of the two often has),
+        # typed text replaces it -- so nothing here can be "confirmed" by
+        # habit the way a pre-filled field could.
+        if name_collection:
+            _nc_correction = ask_long_text(
+                "Confirm Name/Collection (leave blank if this didn't change):",
+                required=False,
+            )
+            if _nc_correction:
+                name_collection = _nc_correction
+        if tech_specs:
+            _ts_correction = ask_long_text(
+                "Confirm Technical Specs (leave blank if this didn't change):",
+                required=False,
+            )
+            if _ts_correction:
+                tech_specs = _ts_correction
+
+    # Step 8: write back to the sheet
+    final_versions = dg.parse_versions(text)
+    generated_text = next(iter(final_versions.values()), "")
+
+    # Name/Collection and Technical Specs are current-state facts about the
+    # unit, not events like a reservation or reprice -- a correction
+    # replaces the old claim in place rather than piling up alongside it,
+    # which would just make Inventory Notes noisier without giving anyone a
+    # version history they actually need. Read once, up front, so both
+    # fields get checked and replaced against the same fresh snapshot
+    # rather than each other's in-progress edits.
+    current_notes = get_row_by_sheet_index(row_index).get("Inventory Notes", "")
+    stamp = date.today().strftime("%m-%d-%Y")
+    working_notes = current_notes
+    notes_changed = False
+    old_name = _get_last_description_spec(current_notes, "NAME/COLLECTION")
+    old_tech = _get_last_description_spec(current_notes, "TECHNICAL SPECS")
+    if name_collection and old_name != name_collection:
+        working_notes = _replace_description_spec(working_notes, "NAME/COLLECTION")
+        working_notes = f"{working_notes}\n[{stamp} · NAME/COLLECTION] {name_collection}".strip()
+        notes_changed = True
+    if tech_specs and old_tech != tech_specs:
+        working_notes = _replace_description_spec(working_notes, "TECHNICAL SPECS")
+        working_notes = f"{working_notes}\n[{stamp} · TECHNICAL SPECS] {tech_specs}".strip()
+        notes_changed = True
+
+    # Confirmation summary -- matches the same "show what's about to change,
+    # then ask" shape every other write in this app already follows
+    # (reprice_unit's REPRICE SUMMARY, manage_reservation's RESERVATION
+    # SUMMARY, edit_inventory_details' EDIT SUMMARY). A field only earns
+    # a row here if it's actually part of what's about to be written -- an
+    # unchanged Name/Collection or Technical Specs answer doesn't appear at
+    # all, rather than cluttering the summary with "(unchanged)" noise for
+    # something that was never a candidate for change this session.
+    all_photos = photo_paths + ([tag_photo] if tag_photo else [])
+    existing_for_channel = existing_descs.get(channel.upper())
+    _label_w = 18
+    _rows = [
+        f"  \033[1m{'SKU:':<{_label_w}}\033[0m{sku}",
+        f"  \033[1m{'Channel:':<{_label_w}}\033[0m{channel.capitalize()}",
+        f"  \033[1m{'Action:':<{_label_w}}\033[0m" + (f"Replacing existing description (updated {existing_for_channel[0]})"
+                                         if existing_for_channel else "New description for this channel"),
+    ]
+    # Name/Collection sets the box's width for this section -- shown
+    # unwrapped (old value on its own line, "→ new value" directly beneath
+    # it), since it's normally short and title-like. Technical Specs is
+    # capped to wrap at whatever width Name/Collection's own content just
+    # established, rather than stretching out to its own natural length --
+    # Technical Specs answers routinely run to full sentences, and left
+    # unbounded that would make this box far wider than every other
+    # summary table in the app for no reason tied to what actually needs
+    # showing. When Name/Collection isn't part of this summary at all
+    # (only Technical Specs changed this session), there's no width to
+    # inherit, so this falls back to the same width used everywhere else
+    # in the app for a hung/wrapped field value (cancel_sale()'s Reason,
+    # manage_reservation()'s Note).
+    _nc_wrap_width = None
+    if name_collection and old_name != name_collection:
+        if old_name:
+            _nc_line1 = old_name
+            _nc_line2 = f"→ {name_collection}"
+            _rows.append(f"  \033[1m{'Name/Collection:':<{_label_w}}\033[0m{_nc_line1}")
+            _rows.append(f"  {'':<{_label_w}}{_nc_line2}")
+            _nc_wrap_width = max(len(_nc_line1), len(_nc_line2))
+        else:
+            _rows.append(f"  \033[1m{'Name/Collection:':<{_label_w}}\033[0m{name_collection}")
+            _nc_wrap_width = len(name_collection)
+    if tech_specs and old_tech != tech_specs:
+        _ts_wrap_width = _nc_wrap_width or 30
+        if old_tech:
+            _ts_old_lines = textwrap.wrap(old_tech, width=_ts_wrap_width) or [""]
+            _rows.append(f"  \033[1m{'Technical Specs:':<{_label_w}}\033[0m{_ts_old_lines[0]}")
+            for _l in _ts_old_lines[1:]:
+                _rows.append(f"  {'':<{_label_w}}{_l}")
+            _ts_new_lines = textwrap.wrap(f"→ {tech_specs}", width=_ts_wrap_width) or [""]
+            for _l in _ts_new_lines:
+                _rows.append(f"  {'':<{_label_w}}{_l}")
+        else:
+            _ts_lines = textwrap.wrap(tech_specs, width=_ts_wrap_width) or [""]
+            _rows.append(f"  \033[1m{'Technical Specs:':<{_label_w}}\033[0m{_ts_lines[0]}")
+            for _l in _ts_lines[1:]:
+                _rows.append(f"  {'':<{_label_w}}{_l}")
+    if all_photos:
+        _rows.append(f"  \033[1m{'Photos:':<{_label_w}}\033[0m{len(all_photos)} photo(s) will be uploaded to Drive.")
+    _print_boxed("GENERATED DESCRIPTION SUMMARY", [("UNIT", _rows)])
+
+    if not ask_yes_no("Write this description to the master sheet?"):
+        print("\nCancelled. Nothing was written.")
+        return
+
+    # Concurrency check, scoped to just this channel -- not the whole
+    # Generated Descriptions cell. A change to a DIFFERENT channel in the
+    # meantime is never this session's concern: the merge below builds on
+    # a fresh read regardless, so another channel's concurrent write is
+    # carried through untouched instead of being flagged as a conflict
+    # that never actually threatened this session's own work. Only a
+    # change to THIS channel's own block means there are now two genuine
+    # candidate captions with no safe way to merge them automatically --
+    # that's the one case actually worth stopping for. Read fresh here,
+    # right before the write itself, rather than trusting the Step 1
+    # snapshot -- the same "read fresh immediately before each write"
+    # principle _sync_sibling_caption() already applies to a sibling
+    # write, now applied here too.
+    _channel_key = channel.upper()
+    _original_entry = dg.parse_existing_descriptions(
+        original_row.get("Generated Descriptions", "")
+    ).get(_channel_key)
+    _fresh_descriptions = get_row_by_sheet_index(row_index).get("Generated Descriptions", "")
+    _current_entry = dg.parse_existing_descriptions(_fresh_descriptions).get(_channel_key)
+
+    _conflict_replaced = False
+    if _original_entry != _current_entry:
+        # Nothing to show if this channel's entry vanished entirely (e.g. a
+        # hand-edited sheet) -- the question below still applies either way.
+        if _current_entry:
+            _conflict_stamp, _conflict_body = _current_entry
+            _print_boxed(f"CURRENT {channel.upper()} DESCRIPTION", [
+                ("LAST UPDATED " + _conflict_stamp, _wrap_text_block(_conflict_body)),
+            ])
+        if not ask_yes_no(f"Someone else's {channel.capitalize()} description landed while you "
+                           f"were working. Write yours anyway and replace theirs?"):
+            print("\nCancelled. Nothing was written.")
+            return
+        _conflict_replaced = True
+
+    combined = dg.merge_description(_fresh_descriptions, channel, generated_text)
+
+    updates = {"Generated Descriptions": combined}
+    photo_uploaded = False
+    if all_photos:
+        print("\n\033[2mUploading photos...\033[0m")
+        try:
+            link = dg.upload_unit_photos(row["SKU"], all_photos)
+            updates["Photos"] = link
+            photo_uploaded = True
+        except Exception as e:
+            _warn(f"Photo upload failed: {e}. The description was still saved.")
+    if notes_changed:
+        updates["Inventory Notes"] = _normalize_inventory_notes(working_notes)
+
+    update_row(row_index, updates)
+    # Reaching this line means the sheet write itself succeeded -- if it
+    # hadn't, update_row() would have raised and this print would never run.
+    # The photo outcome still needs its own word here: a silent "saved"
+    # after all_photos was true doesn't tell her whether the photo actually
+    # made it to Drive or just failed quietly behind the warning above.
+    if all_photos:
+        _photo_suffix = (
+            f" \033[38;5;202m{len(all_photos)} photo{'s' if len(all_photos) != 1 else ''} uploaded to Drive.\033[0m"
+            if photo_uploaded else " \033[33mPhoto upload failed -- see warning above.\033[0m"
+        )
+    else:
+        _photo_suffix = ""
+    if _conflict_replaced:
+        print(f"\n\033[38;5;202m✓ {row['SKU']} description saved -- replaced a differing "
+              f"{channel.capitalize()} description that was written while you were working."
+              f"\033[0m{_photo_suffix}")
+    else:
+        print(f"\n\033[38;5;202m✓ {row['SKU']} description saved.\033[0m{_photo_suffix}")
+
+    # Step 9: propagate a genuine Name/Collection or Technical Specs
+    # correction to any sibling channel that already has a saved
+    # description. Inventory Notes always reflects the current, correct
+    # answer, but an already-generated caption is static text -- without
+    # this, a sibling channel's saved description could keep stating a
+    # fact that's since been corrected here, with nothing anywhere
+    # flagging it. Only fires for a genuine change (something was on file
+    # and this session's answer differs) -- a first-time-set has nothing
+    # stale to fix, since no sibling caption could have referenced a fact
+    # that didn't exist yet. This is the ONLY point sibling-sync is ever
+    # offered from -- it fires after this channel's own caption is fully
+    # generated, refined, and written, so it sees whatever value ended up
+    # final regardless of whether that came from Step 4, a Point 1
+    # resolution, or a Step 7.5 correction after mid-session refinement.
+    # Both sides have to be non-blank before comparing -- matching Step 8's
+    # own guard exactly. Checking old_name alone (without also requiring
+    # name_collection) meant leaving a field blank this session (skipping
+    # it, not correcting it) read as "changed to blank" the moment
+    # anything was already on file, offering to patch a sibling's caption
+    # with a Name/Collection or Technical Specs of '' -- a real risk, not
+    # just a spurious prompt, since saying yes there would have sent
+    # Claude an instruction to blank out a sibling's already-correct fact.
+    _changed_fields = []
+    if name_collection and old_name and old_name != name_collection:
+        _changed_fields.append(("Name/Collection", old_name, name_collection))
+    if tech_specs and old_tech and old_tech != tech_specs:
+        _changed_fields.append(("Technical Specs", old_tech, tech_specs))
+
+    _offer_sibling_sync(_changed_fields)
+
+
 def main_menu():
     load_garment_types()
     load_countries()
@@ -6416,10 +7889,12 @@ def main_menu():
         print("\033[2m8.\033[0m  Cancel a sale")
         print("\033[2m9.\033[0m  Customer insights")
         print("\033[2m10.\033[0m Generate report")
+        print("\033[2m11.\033[0m Generate product description")
         print()
-        print("\033[2m11. Exit\033[0m")
+        print("\033[2m12. Exit\033[0m")
         print()
-        raw = input("Select an option (1-11): ").strip()
+        raw = input(f"\033[1mSelect an option (1-12):\033[0m {_ANSWER_COLOR}").strip()
+        print("\033[0m", end="")
         try:
             if raw == "1":
                 add_new_inventory()
@@ -6442,12 +7917,21 @@ def main_menu():
             elif raw == "10":
                 generate_report_menu()
             elif raw == "11":
+                generate_product_description()
+            elif raw == "12":
                 print("\nGoodbye.")
                 break
             else:
-                _warn("Please enter a number between 1 and 11.")
+                _warn("Please enter a number between 1 and 12.")
         except KeyboardInterrupt:
-            print("\n\nOperation interrupted. Returning to Main Menu.")
+            # Ctrl+C during a raw input()-based prompt interrupts it after
+            # the orange answer-color code has already been sent (it's
+            # part of the prompt string, printed before input() blocks),
+            # skipping straight past that prompt's own reset -- explicitly
+            # resetting here guarantees a clean slate regardless of where
+            # the interrupt actually landed, rather than relying on
+            # every individual prompt call site to protect against this.
+            print("\033[0m\n\nOperation interrupted. Returning to Main Menu.")
         except gspread.exceptions.APIError as e:
             print(f"\n\n\033[91mA Google Sheets error interrupted this operation: {e}\033[0m")
             print("Nothing further was written. Please check your connection and try again.")
@@ -6460,7 +7944,7 @@ if __name__ == "__main__":
     try:
         main_menu()
     except KeyboardInterrupt:
-        print("\n\nInterrupted. Exiting.")
+        print("\033[0m\n\nInterrupted. Exiting.")
     except SystemExit:
         raise
     except Exception as e:

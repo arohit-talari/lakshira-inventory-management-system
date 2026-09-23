@@ -281,11 +281,34 @@ class TestReservationDays:
 
 # ── get_margin_color / get_markup_color / get_status_color ──────────────────────
 class TestColorTiers:
-    def test_margin_color_boundaries(self):
-        assert inv.get_margin_color(14.99) == "\033[31m"   # red, below 15
-        assert inv.get_margin_color(15.0) == "\033[93m"    # yellow, exactly at 15
-        assert inv.get_margin_color(19.99) == "\033[93m"   # yellow, below 20
-        assert inv.get_margin_color(20.0) == "\033[32m"    # green, exactly at 20
+    def test_margin_color_boundaries_hero_tier(self):
+        # Hero weaves (Kanjivaram/Gadwal/Banaras): flag below 20%, target 25%+
+        assert inv.get_margin_color(19.99, "Kanjivaram") == "\033[31m"   # red, below 20
+        assert inv.get_margin_color(20.0, "Kanjivaram") == "\033[93m"    # yellow, exactly at 20
+        assert inv.get_margin_color(24.99, "Kanjivaram") == "\033[93m"   # yellow, below 25
+        assert inv.get_margin_color(25.0, "Kanjivaram") == "\033[32m"    # green, exactly at 25
+
+    def test_margin_color_boundaries_supplemental_tier(self):
+        # Supplemental weaves (everything else): flag below 15%, target 18%+
+        assert inv.get_margin_color(14.99, "Chanderi") == "\033[31m"     # red, below 15
+        assert inv.get_margin_color(15.0, "Chanderi") == "\033[93m"      # yellow, exactly at 15
+        assert inv.get_margin_color(17.99, "Chanderi") == "\033[93m"     # yellow, below 18
+        assert inv.get_margin_color(18.0, "Chanderi") == "\033[32m"      # green, exactly at 18
+
+    def test_margin_color_blouse_never_hero_even_with_hero_name(self):
+        # "Kanjivaram Silk Blouse" carries the hero family name but is an
+        # accessory piece, not the hero saree -- should use the
+        # supplemental thresholds (flag below 15%), not hero (flag below 20%).
+        assert inv.get_margin_color(18.0, "Kanjivaram Silk Blouse") == "\033[32m"   # green under supplemental
+        assert inv.get_margin_color(14.99, "Kanjivaram Silk Blouse") == "\033[31m"  # red under supplemental
+
+    def test_is_hero_weave(self):
+        assert inv._is_hero_weave("Kanjivaram") is True
+        assert inv._is_hero_weave("Twill Gadwal Silk") is True
+        assert inv._is_hero_weave("Benaras Kota") is True
+        assert inv._is_hero_weave("Chanderi") is False
+        assert inv._is_hero_weave("Ikat Silk") is False
+        assert inv._is_hero_weave("Kanjivaram Silk Blouse") is False
 
     def test_markup_color_boundaries(self):
         assert inv.get_markup_color(9.99) == "\033[91m"
