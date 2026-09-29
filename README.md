@@ -39,7 +39,7 @@ Before any recommendation was made, a structured stakeholder discovery and requi
 | **Method** | 7-section discovery and requirements session, run as a conversation, not a script |
 | **Scope** | 45 questions across current-state workflow, pain points, customers, suppliers, financials, growth goals, and current data and tools |
 | **Audit** | A formal data-quality audit logging 44 specific pre-existing issues, including duplicate SKUs and missing cost/pricing data, before a line of the new system was built |
-| **Output** | Findings that directly shaped the data model, the analytics built, and 10 of the 11 operations scoped into **Operational System** (the 11th, added later for a separate need, is covered in that section below) |
+| **Output** | Findings that directly shaped the data model, the analytics built, and the 11 operations scoped into **Operational System** |
 | **Impact** | Self-reported inventory count was found to understate actual holdings by roughly half once every source was located |
 
 [Interview Framework](docs/STAKEHOLDER_DISCOVERY.md)
@@ -117,13 +117,11 @@ Once the warehouse was built and a string of descriptive and diagnostic queries 
 
 <h3 align="left">5. Operational System</h3>
 
-The data and analytics foundation still left a gap: the owner, already juggling supplier relationships, sales, marketing, advertising, and building their own storefront from scratch, found that data entry and management remained a bottleneck compounding downstream into how they assessed the business. The final stage scoped the business down to its 10 most-used, most-critical operations, replacing manual spreadsheet editing with a guided Command-Line Interface (CLI) that catches errors before they happen and automates the calculations most prone to mistakes, without ever standing in for the owner's judgment and expertise. Every guardrail and workflow decision was shaped by directly observing how the owner actually worked, not designed in the abstract, then directed through AI-assisted development into the working system.
-
-An 11th operation was added afterward, for a separate need discovery hadn't scoped: AI-assisted product description generation for Instagram, Shopify, and WhatsApp, grounded in the business's own brand voice and per-unit detail rather than generic copy. It's a different kind of operation from the other 10 — built around a multi-turn Claude API conversation instead of guided data entry — and is covered in its own right in [Architecture](docs/ARCHITECTURE.md).
+The data and analytics foundation still left a gap: the owner, already juggling supplier relationships, sales, marketing, advertising, and building their own storefront from scratch, found that data entry and management remained a bottleneck compounding downstream into how they assessed the business. The final stage scoped the business down to its 11 most-used, most-critical operations, replacing manual spreadsheet editing with a guided Command-Line Interface (CLI) that catches errors before they happen and automates the calculations most prone to mistakes, without ever standing in for the owner's judgment and expertise. Every guardrail and workflow decision was shaped by directly observing how the owner actually worked, not designed in the abstract, then directed through AI-assisted development into the working system.
 
 | | |
 |---|---|
-| **Operations** | 11: 10 covering the full inventory-to-sale-to-reporting lifecycle, plus AI-assisted product description generation added later |
+| **Operations** | 11, covering the full inventory-to-sale-to-reporting lifecycle plus AI-assisted marketing content |
 | **Quality Assurance** | 355 defects resolved (23 Critical) via structured UAT (User Acceptance Testing), backed by a 236-test automated regression suite |
 | **Built with** | Python, directed through Claude Code |
 | **Impact** | Removed day-to-day dependence on the analyst for pricing and discount decisions, replacing ad hoc requests with self-serve tools grounded in real margin thresholds |

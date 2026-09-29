@@ -39,9 +39,9 @@ This is the operational-system stage's own stack. The data warehouse (MySQL/AWS 
 8. **Cancel a Sale**
 9. **Customer Insights**
 10. **Generate Report**
-11. **Generate Product Description**: added after the original 10, for a separate need discovery hadn't scoped -- AI-assisted Instagram/Shopify/WhatsApp caption generation grounded in the business's own brand voice, not generic copy
+11. **Generate Product Description**
 
-Every write operation follows the same guided shape: look up → validate status/eligibility → collect fields one at a time → show a full confirmation summary → require explicit confirmation → write → confirm success. Errors surface in plain English at the point of entry, not after the fact. Generate Product Description follows this same discipline at its write step, but adds an AI generation call, an optional completeness follow-up round, and a multi-turn refinement loop in the middle, since what it produces is a draft to react to, not a fixed set of values. See [Architecture](ARCHITECTURE.md) for the data model, SKU generation logic, currency handling, and per-operation detail.
+Every write operation follows the same guided shape: look up → validate status/eligibility → collect fields one at a time → show a full confirmation summary → require explicit confirmation → write → confirm success. Errors surface in plain English at the point of entry, not after the fact. Generate Product Description follows this same discipline at its write step, though reaching that confirmation is richer than it is for the other 10 operations, since it's producing a draft to react to, not a fixed set of values. See [Architecture](ARCHITECTURE.md) for the data model, SKU generation logic, currency handling, and per-operation detail.
 
 ## Validation and Testing
 
@@ -79,7 +79,7 @@ The validation effort above was run as a structured DMAIC (Define, Measure, Anal
 **Specific Lean Six Sigma tools applied here, beyond DMAIC as a label:**
 
 - **Poka-yoke (mistake-proofing)**: every constrained business field (status, category, weave type, sales channel) is a validated pick-list, never free text. An entire class of data-entry defect is made structurally impossible, no longer just discouraged.
-- **Standardized work**: all 11 operations follow the same look up → validate → collect → confirm → write discipline at the write step, so the system behaves predictably for a non-technical user regardless of which task they're performing. Generate Product Description extends that same discipline around a materially different core (AI-assisted content generation) rather than departing from it.
+- **Standardized work**: all 11 operations follow the same look up → validate → collect → confirm → write discipline at the write step, so the system behaves predictably for a non-technical user regardless of which task they're performing.
 - **Waste elimination (Muda)**: manual cross-referencing and calculation (motion/waiting waste) replaced by automation; recurring data-entry defects (defect waste) prevented at the point of entry; a report that once required manually compiling numbers across tabs now generates on demand.
 - **Kaizen (continuous improvement)**: the system evolved across the engagement through a repeated structure: audit → fix → validate, rather than one large rewrite.
 
@@ -100,7 +100,7 @@ cp .env.example .env   # fill in your own values
 # Generate Product Description's photo upload additionally needs a real
 # Google account's OAuth client secret (oauth_client_secret.json, same
 # directory) and DRIVE_PHOTOS_ROOT_ID set in .env -- service accounts have
-# no Drive storage quota of their own, so this piece runs as OAuth user
+# no Drive storage quota of their own, so photo upload runs as OAuth user
 # delegation instead. Not required for the other 10 operations.
 cd ..
 
@@ -119,7 +119,7 @@ pytest tests/test_interactive_*.py -v -s                        # Tier 2 -- need
 ```
 inventory_management_system/
   inventory.py             # the CLI -- all 11 operations
-  description_generator.py # Op 11's Claude API conversation, prompt construction, and Drive photo upload
+  description_generator.py # Claude API conversation, prompt construction, and Drive photo upload
   generate_report.py       # PDF report generation + structured executive summary via the Claude API
   report_config.py         # reporting configuration (fonts, brand colors, secrets loading)
   scheduler.py             # automated report scheduling (macOS launchd)
