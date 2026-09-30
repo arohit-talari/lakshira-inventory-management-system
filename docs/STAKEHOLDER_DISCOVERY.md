@@ -77,7 +77,7 @@ The session ran as a free-flowing conversation, not an interrogation: starting w
 ## Section 7: Data and Tools
 *Understanding what exists*
 
-41. Can you show me every spreadsheet or document you currently use to run the business?
+41. Can you show me every workbook or document you currently use to run the business?
 42. How often do you update them: in real time, daily, weekly, whenever you remember?
 43. Is there anything you track in your head or in WhatsApp that isn't written down anywhere?
 44. Have you ever tried any tools or apps to manage the business and stopped using them? Why?

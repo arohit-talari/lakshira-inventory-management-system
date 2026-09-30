@@ -46,11 +46,11 @@ Before any recommendation was made, a structured stakeholder discovery and requi
 
 <h3 align="left">2. Data Foundation</h3>
 
-Inventory tracking was dispersed across 12 separate spreadsheets with no single source of truth, no standardized categories, weave types, or suppliers, and no consistent pricing method. The first build stage replaced that entirely with a unified master sheet: standardized category and supplier reference tables, validated pick-lists for sales channel and status, conditional formatting that flags unit- and business-level health metrics, and formula-driven derived columns. Where there was once a scattered manual tracking system for the business's lifetime units, there now was a real data model, the single source of truth for any question the business had.
+Inventory tracking was dispersed across 12 separate workbooks with no single source of truth, no standardized categories, weave types, or suppliers, and no consistent pricing method. The first build stage replaced that entirely with a unified master sheet: standardized category and supplier reference tables, validated pick-lists for sales channel and status, conditional formatting that flags unit- and business-level health metrics, and formula-driven derived columns. Where there was once a scattered manual tracking system for the business's lifetime units, there now was a real data model, the single source of truth for any question the business had.
 
 | | |
 |---|---|
-| **Before** | 12 fragmented spreadsheets, no standardized categories, weave types, suppliers, or pricing method |
+| **Before** | 12 fragmented workbooks, no standardized categories, weave types, suppliers, or pricing method |
 | **Built** | One unified master sheet with standardized reference tables, data validation, conditional formatting, and formula-driven fields |
 | **Documentation** | A full data dictionary and category/supplier reference tables, produced as standalone artifacts |
 | **Impact** | Manual pricing, tested under direct supervision, contained a calculation error roughly 7 times out of 10; corrected pricing recovered several thousand dollars in inventory that had been priced below its own cost |
@@ -65,7 +65,7 @@ A unified master sheet centralized the data needed to assess the business's heal
 | **Schema** | 5 normalized tables: category, customer, inventory, supplier, transaction |
 | **Scale** | 1,540 inventory records · 508 transactions · 58 customers · 19 suppliers |
 | **Status** | Built and running; ETL codebase not yet published as a separate repository |
-| **Impact** | Exploratory Data Analysis, e.g. supplier profitability or cash tied up in aging stock, that once took hours of manual spreadsheet review is now done in seconds |
+| **Impact** | Exploratory Data Analysis, e.g. supplier profitability or cash tied up in aging stock, that once took hours of manual workbook review is now done in seconds |
 
 ```mermaid
 flowchart TD
@@ -117,7 +117,7 @@ Once the warehouse was built and a string of descriptive and diagnostic queries 
 
 <h3 align="left">5. Operational System</h3>
 
-The data and analytics foundation still left a gap: the owner, already juggling supplier relationships, sales, marketing, advertising, and building their own storefront from scratch, found that data entry and management remained a bottleneck compounding downstream into how they assessed the business. The final stage scoped the business down to its 11 most-used, most-critical operations, replacing manual spreadsheet editing with a guided Command-Line Interface (CLI) that catches errors before they happen and automates the calculations most prone to mistakes, without ever standing in for the owner's judgment and expertise. Every guardrail and workflow decision was shaped by directly observing how the owner actually worked, not designed in the abstract, then directed through AI-assisted development into the working system.
+The data and analytics foundation still left a gap: the owner, already juggling supplier relationships, sales, marketing, advertising, and building their own storefront from scratch, found that data entry and management remained a bottleneck compounding downstream into how they assessed the business. The final stage scoped the business down to its 11 most-used, most-critical operations, replacing manual workbook editing with a guided Command-Line Interface (CLI) that catches errors before they happen and automates the calculations most prone to mistakes, without ever standing in for the owner's judgment and expertise. Every guardrail and workflow decision was shaped by directly observing how the owner actually worked, not designed in the abstract, then directed through AI-assisted development into the working system.
 
 | | |
 |---|---|

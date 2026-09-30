@@ -2,7 +2,7 @@
 
 *Part of the [Lakshira engagement](../README.md). This is the deep dive on the operational-system stage specifically; refer to the main README for the full lifecycle: discovery, data foundation, warehouse, BI, and this system.*
 
-The Inventory Management System (IMS) is a terminal-based Command-Line Interface (CLI) for inventory, sales, and business intelligence at Lakshira Handwoven Weaves, a small, rapidly growing handloom textile business, replacing repetitive manual spreadsheet input and editing with a guided, validated interface built for a non-technical user.
+The Inventory Management System (IMS) is a terminal-based Command-Line Interface (CLI) for inventory, sales, and business intelligence at Lakshira Handwoven Weaves, a small, rapidly growing handloom textile business, replacing repetitive manual workbook input and editing with a guided, validated interface built for a non-technical user.
 
 Designed and directed by **Arohit Talari**: every design decision, bug fix, and test in this repository was specified and validated across a multi-week working session, with **Claude Code** as the execution layer translating that direction into working code, not a one-shot generation. The commit history and the testing section below reflect that iterative process directly.
 
@@ -70,7 +70,7 @@ One specific risk that discipline caught: because more than one person can act o
 
 The validation effort above was run as a structured DMAIC (Define, Measure, Analyze, Improve, Control) cycle, closing the gap between the manual process and the delivered system:
 
-- **Define**: the manual, hand-edited spreadsheet was the source of the defects being eliminated: no validation, no audit trail, silent data-entry errors, no repeatable reporting process.
+- **Define**: the manual, hand-edited workbook was the source of the defects being eliminated: no validation, no audit trail, silent data-entry errors, no repeatable reporting process.
 - **Measure**: 355 defects identified and prioritized by business risk (23 Critical), against a 236-test suite establishing a repeatable baseline instead of ad hoc spot-checks.
 - **Analyze**: every defect was root-caused against the actual business workflow it broke, never just patched at the symptom. A reporting mismatch, for example, was traced back to specific incomplete source records rather than written off as noise.
 - **Improve**: each defect resolved at its root cause, with the underlying process changed so the same class of issue can't recur. Fixing the immediate instance alone wasn't the goal.
