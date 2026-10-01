@@ -62,7 +62,7 @@ A unified master sheet centralized the data needed to assess the business's heal
 | | |
 |---|---|
 | **Pipeline** | Extract (Google Sheets API) → Transform (pandas) → Load (MySQL on AWS RDS) |
-| **Schema** | 5 normalized tables: category, customer, inventory, supplier, transaction |
+| **Schema** | 5 normalized tables: Category, Customer, Inventory, Supplier, Transaction |
 | **Scale** | 1,540 inventory records · 508 transactions · 58 customers · 19 suppliers |
 | **Status** | Built and running; ETL codebase not yet published as a separate repository |
 | **Impact** | Margin by weave type and supplier, or repeat-customer revenue share, now take seconds instead of hours of manual workbook review |
