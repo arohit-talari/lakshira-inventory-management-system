@@ -27,7 +27,7 @@ The master sheet has 41 columns. A few worth calling out:
 | Column | Entry method |
 |---|---|
 | **SKU** | Auto-generated, never user-entered (see §4) |
-| **Category Code** | Auto-assigned from weave type selection, a 1:1 mapping, enforced |
+| **Category Code** | Maps 1:1 from weave type selection, enforced automatically |
 | **Total Cost (USD)** | Derived: Total Cost (INR) ÷ ECB rate on acquisition date |
 | **Selling Price (USD/INR)** | User provides one, the other two derive from it (see §5) |
 | **Gross Profit / Markup % / Margin %** | All derived, never entered directly |
