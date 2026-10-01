@@ -60,12 +60,12 @@ Either path recalculates Gross Profit, Markup %, and Margin % automatically, and
 1. **Add Inventory**: new SKU, cost and pricing entry, ECB-rate-derived cost basis
 2. **Edit Inventory Details**: amend an existing unit's fields, with cost-field edits triggering a full pricing recalculation
 3. **Reprice a Unit**: change an unsold unit's selling price via either pricing path
-4. **Discount Simulator**: model a discount's effect on margin before committing to it, no write to the sheet
-5. **Manage Reservation**: place/release a hold for a specific customer, with overdue-reservation surfacing
+4. **Simulate a Discount**: model a discount's effect on margin before committing to it, no write to the sheet
+5. **Manage a Reservation**: place/release a hold for a specific customer, with overdue-reservation surfacing
 6. **Record a Sale**: the most complex flow, customer capture and matching, discount handling, payment status, below-cost gating
-7. **Record Outstanding Payment**: apply a payment against a partially-paid sale, track running balance
+7. **Record an Outstanding Payment**: apply a payment against a partially-paid sale, track running balance
 8. **Cancel a Sale**: reverse a sale, restore the unit to `Available`, track any pending refund
-9. **Customer Insights**: lifetime and period-scoped purchase history, spend, and outstanding balance per customer
+9. **View Customer Insights**: lifetime and period-scoped purchase history, spend, and outstanding balance per customer
 10. **Generate Report**: a full PDF business-intelligence report spanning financial performance, customer and sales behavior, and inventory and supply-chain health, capped with a structured Claude API executive summary and targeted recommendations, plus optional email delivery
 11. **Generate Product Description**: a multi-turn Claude API conversation generates descriptions across the business's sales channels, grounded in the business's own brand voice and per-unit detail, with a sibling-sync mechanism that keeps a unit's other channel descriptions consistent with a corrected fact.
 

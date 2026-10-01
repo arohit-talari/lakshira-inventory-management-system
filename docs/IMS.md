@@ -32,12 +32,12 @@ This is the operational-system stage's own stack. The data warehouse (MySQL/AWS 
 1. **Add Inventory**
 2. **Edit Inventory Details**
 3. **Reprice a Unit**
-4. **Discount Simulator**
-5. **Manage Reservation**
+4. **Simulate a Discount**
+5. **Manage a Reservation**
 6. **Record a Sale**
-7. **Record Outstanding Payment**
+7. **Record an Outstanding Payment**
 8. **Cancel a Sale**
-9. **Customer Insights**
+9. **View Customer Insights**
 10. **Generate Report**
 11. **Generate Product Description**
 
