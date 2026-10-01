@@ -57,7 +57,7 @@ Inventory tracking was dispersed across 12 separate workbooks with no single sou
 
 <h3 align="left">3. Data Warehouse</h3>
 
-A unified master sheet centralized the data needed to assess the business's health, but it still couldn't support Exploratory Data Analysis (descriptive and diagnostic analytics, run as one-off queries rather than scheduled reports) at scale, so a Python ETL pipeline extracts data from the master sheet via the Sheets API, transforms it with pandas, and loads it into a normalized MySQL schema hosted on AWS RDS (Relational Database Service). The business's live operational data became queryable for analysis the sheet alone couldn't support.
+A unified master sheet centralized the data needed to assess the business's health, but it still couldn't support Exploratory Data Analysis (descriptive and diagnostic analytics, run as one-off queries rather than scheduled reports) at scale, so a Python ETL pipeline extracts data from the master sheet via the Sheets API, transforms it with pandas, and loads it into a normalized MySQL schema hosted on Amazon's Relational Database Service (AWS RDS). The business's live operational data became queryable for analysis the sheet alone couldn't support.
 
 | | |
 |---|---|
@@ -122,7 +122,7 @@ The data and analytics foundation still left a gap: the owner, already juggling 
 | | |
 |---|---|
 | **Operations** | 11, covering the full inventory-to-sale-to-reporting lifecycle plus AI-assisted marketing content |
-| **Quality Assurance** | 355 defects resolved (23 Critical) via structured UAT (User Acceptance Testing), backed by a 236-test automated regression suite |
+| **Quality Assurance** | 355 defects resolved, 23 of them Critical, via structured User Acceptance Testing (UAT), backed by a 236-test automated regression suite |
 | **Built with** | Python, directed through Claude Code |
 | **Impact** | Removed day-to-day dependence on the analyst for pricing and discount decisions, replacing ad hoc requests with self-serve tools grounded in real margin thresholds |
 
