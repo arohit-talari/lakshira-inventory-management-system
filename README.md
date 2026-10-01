@@ -21,10 +21,10 @@ flowchart LR
 
 | | |
 |---|---|
-| **`docs/`** | The write-ups and diagrams: how the system works, how its requirements were gathered, and the schema it's built on |
-| **`inventory_management_system/`** | The system itself: its code, the fonts and logo used in generated reports, and a settings template |
+| **`docs/`** | Write-ups and diagrams: how the system works, how its requirements were gathered, and the schema it's built on |
+| **`inventory_management_system/`** | Houses the system itself: its code, the fonts and logo used in generated reports, and a settings template |
 | **`tests/`** | 236 automated checks that confirm the system still works correctly every time something changes |
-| **`requirements.txt`** | The list of external tools the system needs installed to run |
+| **`requirements.txt`** | External tools the system needs installed to run |
 | **`pytest.ini`** | Configuration for running the automated tests |
 | **`.gitignore`** | Tells Git which files, like passwords and credentials, should never be uploaded |
 
