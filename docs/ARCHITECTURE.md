@@ -29,7 +29,7 @@ The master sheet has 41 columns. A few worth calling out:
 | **SKU** | Auto-generated, never user-entered (see §4) |
 | **Category Code** | Maps 1:1 from weave type selection, enforced automatically |
 | **Total Cost (USD)** | Derived: Total Cost (INR) ÷ ECB rate on acquisition date |
-| **Selling Price (USD / INR-Provided / INR-Derived)** | Whichever currency the client quotes is stored as-is; the other is then calculated via ECB (see §5) |
+| **Selling Price (USD / INR-Provided / INR-Derived)** | The quoted currency is stored as-is; the other is then calculated via ECB (see §5) |
 | **Gross Profit / Markup % / Margin %** | All derived, never entered directly |
 | **Days to Sell / Days in Inventory / Aging Bucket / Dead Stock Flag** | Formula-driven in the sheet; the script reads these, never writes them |
 | **Status** | Constrained to a fixed set (`Available`, `Reserved`, `Sold`, `Sold - Partial Payment`, `Unassigned`), never free text |
