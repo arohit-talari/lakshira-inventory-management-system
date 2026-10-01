@@ -122,7 +122,7 @@ The data and analytics foundation still left a gap: the owner, already juggling 
 | | |
 |---|---|
 | **Operations** | 11, covering the full inventory-to-sale-to-reporting lifecycle plus AI-assisted marketing content |
-| **Quality Assurance** | 390 defects resolved, 23 of them Critical, via structured User Acceptance Testing (UAT), backed by a 236-test automated regression suite |
+| **Quality Assurance** | 390 defects resolved via structured User Acceptance Testing (UAT), backed by a 236-test automated regression suite |
 | **Built with** | Python, directed through Claude Code |
 | **Impact** | Removed day-to-day dependence on the analyst for pricing and discount decisions, replacing ad hoc requests with self-serve tools grounded in real margin thresholds |
 
