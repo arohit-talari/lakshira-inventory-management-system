@@ -31,9 +31,9 @@ The master sheet has 41 columns. A few worth calling out:
 | **Total Cost (USD)** | Derived: Total Cost (INR) ÷ ECB rate on acquisition date |
 | **Selling Price (USD / INR-Provided / INR-Derived)** | Whichever currency the client quotes is stored as-is; the other is then calculated via ECB (see §5) |
 | **Gross Profit / Markup % / Margin %** | All derived, never entered directly |
-| **Days to Sell / Days in Inventory / Aging Bucket / Dead Stock Flag** | Formula-driven in the sheet itself; the script reads these, never writes them |
+| **Days to Sell / Days in Inventory / Aging Bucket / Dead Stock Flag** | Formula-driven in the sheet; the script reads these, never writes them |
 | **Status** | Constrained to a fixed set (`Available`, `Reserved`, `Sold`, `Sold - Partial Payment`, `Unassigned`), never free text |
-| **Photos / Generated Descriptions** | Written by Generate Product Description (§6) only; a Drive link and the unit's per-channel marketing descriptions, respectively |
+| **Photos / Generated Descriptions** | Written by Generate Product Description (see §6) only; a Drive link and the unit's per-channel marketing descriptions, respectively |
 
 The `Unassigned` status is a deliberate design choice: a SKU can be generated in sequence with no physical unit behind it yet, preserving the numbering sequence without corrupting cost and pricing columns with placeholder data.
 
