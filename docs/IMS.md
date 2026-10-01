@@ -21,7 +21,7 @@ The IMS closes both gaps directly: it hardcodes the reference tables into real p
 | **System of Record** | Google Sheets, via `gspread` |
 | **CLI / Business Logic** | Python (`questionary` for interactive prompts, `phonenumbers` for validated international phone entry) |
 | **Currency conversion** | Live European Central Bank (ECB) historical exchange rates via the Frankfurter API |
-| **Reporting** | `reportlab` (PDF generation), Claude API (executive summary grounded in brand context and stakeholder-discovery findings, injected into the prompt each run) |
+| **Reporting** | `reportlab` (PDF generation), Claude API (executive summary generation) |
 | **Scheduling** | macOS `launchd` (automated monthly/quarterly/annual report generation) |
 | **Testing** | `pytest`, `pexpect` (drives the interactive CLI through a pseudo-terminal, or pty) |
 
