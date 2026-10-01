@@ -109,7 +109,7 @@ Once the warehouse was built and a string of descriptive and diagnostic queries 
 | | |
 |---|---|
 | **Dashboards** | Business Overview · Inventory & Operations · Customer Intelligence |
-| **Analytics** | Sell-through rate, dead stock/markdown, inventory health and turnover, supplier performance, pricing effectiveness, margin-bucket distribution |
+| **Analytics** | Sell-Through Rate · Dead Stock/Markdown · Inventory Health and Turnover · Supplier Performance · Pricing Effectiveness · Margin-Bucket Distribution |
 | **Status** | Built and in use privately with real data; a sanitized public demo, built on pattern-preserving synthetic data, is shown in [Business Intelligence](docs/BUSINESS_INTELLIGENCE.md) |
 | **Impact** | Visibility into inventory-aging risk directly changed intake behavior, as the following month became the business's best on record among sales with a confirmed date |
 
