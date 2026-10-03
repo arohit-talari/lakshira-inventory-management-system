@@ -749,7 +749,7 @@ def _warn(message):
 # not just the color alone, so leaving bold off here would have made these
 # prompts orange but not bold while every menu and ask_long_text() field
 # is both.
-_ANSWER_COLOR = "\033[38;5;214;1m"
+_ANSWER_COLOR = "\001\033[38;5;214;1m\002"
 
 # Same orange, for ask_long_text()'s prompt_toolkit-based prompts -- the ""
 # (default) rule colors anything not given its own class, which in
@@ -1060,11 +1060,10 @@ def ask_percent(prompt, allow_zero=True):
 def ask_contact_method():
     """Prompt for a reserver's contact with type-specific validation. Returns a formatted string."""
     while True:
-        print()
         contact_type = questionary.select(
             "",
             choices=["Phone", "Instagram", "Email"],
-            qmark="Point of Contact:",
+            qmark="\nPoint of Contact:",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
@@ -1291,7 +1290,7 @@ def resolve_sku(category_code, weave_type, batch_reserved_skus=None):
     chosen_existing_row = None
 
     if unassigned:
-        print()
+        print(f"\n\033[38;5;202m{weave_type} has unassigned units available.\033[0m")
         chosen_sku = questionary.select(
             "",
             choices=unassigned + [
@@ -1301,7 +1300,7 @@ def resolve_sku(category_code, weave_type, batch_reserved_skus=None):
                     value="Generate a new SKU",
                 ),
             ],
-            qmark=f"{weave_type} has unassigned units available -- select one, or generate a new SKU:",
+            qmark="Select one, or generate a new SKU:",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
@@ -1574,7 +1573,7 @@ def _apply_bold_tag_formatting(sheet_row_number, col_name):
 def _reservation_days(reserved_date_str):
     """Return (days_held, is_expired) for a Reserved unit, or (None, False)
     if Reserved Date is blank/malformed -- or in the future, which can only
-    happen via a hand-edited sheet, since Manage Reservation always
+    happen via a hand-edited sheet, since Manage a Reservation always
     validates it as not-future at entry. A future date would otherwise
     produce a negative day count instead of a real answer."""
     days = _days_since(_safe_parse_date(reserved_date_str))
@@ -1590,9 +1589,8 @@ def check_pricing_warnings(margin_pct, markup_pct, weave_type, gross_profit_usd=
       - Low markup only: LOW MARKUP note + menu.
       - Neither: menu only, no alert.
     weave_type: which margin tier applies -- hero (Kanjivaram/Gadwal/
-    Banaras) is flagged below 20%, everything else below 15%, a
-    tier-aware replacement for one flat threshold applied to every
-    weave type regardless of tier.
+    Banaras) is flagged below 25%, everything else below 18%, per the
+    client's 2026-09-06 answer replacing the old flat 15% line.
     Returns (proceed, warned): proceed=True (continue), False (re-enter), None (discard & exit).
     """
     warned = False
@@ -1625,7 +1623,6 @@ def check_pricing_warnings(margin_pct, markup_pct, weave_type, gross_profit_usd=
             print(f"Markup is {markup_pct:.1f}%, which is unusually low.")
             warned = True
 
-    print()
     choice = questionary.select(
         "",
         choices=[
@@ -1634,7 +1631,7 @@ def check_pricing_warnings(margin_pct, markup_pct, weave_type, gross_profit_usd=
             questionary.Separator(" "),
             _back_choice(exit_label),
         ],
-        qmark="How would you like to proceed?",
+        qmark="\nHow would you like to proceed?",
         instruction=" ",
         style=_MENU_STYLE,
     ).unsafe_ask()
@@ -1671,7 +1668,7 @@ def _enter_new_garment_type():
             # user said no — fall through to confirm as genuinely new
 
         elif len(gt_matches) > 1:
-            print("\nClose matches found:")
+            print(f"\n\033[38;5;202mClose matches found:\033[0m")
             for i, m in enumerate(gt_matches, 1):
                 print(f"  {i}. {m}")
             if ask_yes_no("Did you mean one of these?"):
@@ -1760,7 +1757,6 @@ def select_or_add_weave_type():
                 break
             _warn(f"No {garment_choice} weave type matches '{query}'. Try again, or press Enter to see all.")
 
-        print()
         selected = questionary.select(
             "",
             choices=display_names + [
@@ -1772,7 +1768,7 @@ def select_or_add_weave_type():
                 questionary.Separator(" "),
                 _back_choice("Change garment type"),
             ],
-            qmark=f"Select {garment_choice} weave type:",
+            qmark=f"\nSelect {garment_choice} weave type:",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
@@ -1810,7 +1806,6 @@ def select_or_add_weave_type():
         # user said no — proceed as genuinely new
 
     elif len(matches) > 1:
-        print()
         pick = questionary.select(
             "",
             choices=matches + [
@@ -1820,7 +1815,7 @@ def select_or_add_weave_type():
                     value="__NONE__",
                 ),
             ],
-            qmark="Multiple close matches found — did you mean one of these?",
+            qmark="\nMultiple close matches found — did you mean one of these?",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
@@ -1871,23 +1866,21 @@ def select_or_add_weave_type():
     # Garment type step — pre-filled from bucket, confirm or override
     label = "your new garment type" if garment_is_new else "based on your selection"
     print(f"\n\033[1mGarment type:\033[0m {garment_choice} ({label}).")
-    print()
     garment_confirm = questionary.select(
         "",
         choices=["Yes", "No — select a different type"],
-        qmark="Is this correct?",
+        qmark="\nIs this correct?",
         instruction=" ",
         style=_MENU_STYLE,
     ).unsafe_ask()
     if "No" in garment_confirm:
-        print()
         garment_type = questionary.select(
             "",
             choices=GARMENT_TYPES + [
                 questionary.Separator(" "),
                 _back_choice(f"Keep '{garment_choice}' after all"),
             ],
-            qmark="Select garment type:",
+            qmark="\nSelect garment type:",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
@@ -1939,7 +1932,6 @@ def select_or_add_supplier():
             break
         _warn(f"No supplier matches '{query}'. Try again, or press Enter to see all.")
 
-    print()
     selected = questionary.select(
         "",
         choices=display_names + [
@@ -1949,7 +1941,7 @@ def select_or_add_supplier():
                 value="Add new supplier",
             ),
         ],
-        qmark="Select supplier:",
+        qmark="\nSelect supplier:",
         instruction=" ",
         style=_MENU_STYLE,
     ).unsafe_ask()
@@ -1980,7 +1972,6 @@ def select_or_add_supplier():
         # user said no — fall through to add as new
 
     elif len(matches) > 1:
-        print()
         pick = questionary.select(
             "",
             choices=matches + [
@@ -1990,7 +1981,7 @@ def select_or_add_supplier():
                     value="__NONE__",
                 ),
             ],
-            qmark="Multiple close matches found — did you mean one of these?",
+            qmark="\nMultiple close matches found — did you mean one of these?",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
@@ -2354,7 +2345,7 @@ def search_and_select_customer(raw_rows, allow_new=True):
     "__CANCEL__", or None -- or ("__NEW__", query) to signal new customer
     entry, only when allow_new is True.
     allow_new: whether registering a new customer is a valid outcome of
-        this search. False for callers (Customer Insights) where every
+        this search. False for callers (View Customer Insights) where every
         selectable outcome must already have purchase history -- offering
         "Register a new customer" there would be a dead end, since
         Insights has nothing to show for someone who hasn't bought
@@ -2377,7 +2368,7 @@ def search_and_select_customer(raw_rows, allow_new=True):
     })
 
     while True:
-        query = input(f"\n\001\033[1m\002Customer search (or press Enter to see all):\001\033[0m\002 {_ANSWER_COLOR}").strip()
+        query = input(f"\n\001\033[1m\002Customer Search (or press Enter to see all):\001\033[0m\002 {_ANSWER_COLOR}").strip()
         print("\033[0m", end="")
         if _looks_like_phone_query(query):
             _warn("Customer names cannot be numbers. Please enter a name or press Enter to see all customers.")
@@ -2443,11 +2434,10 @@ def search_and_select_customer(raw_rows, allow_new=True):
         choices.append(questionary.Separator(" "))
         choices.append(_back_choice("Return to Main Menu"))
 
-        print()
         selected = questionary.select(
             "",
             choices=choices,
-            qmark="Select customer:",
+            qmark="\nSelect a customer:",
             instruction=" ",
             style=_STYLE,
         ).unsafe_ask()
@@ -2458,7 +2448,7 @@ def search_and_select_customer(raw_rows, allow_new=True):
             return ("__NEW__", query)
         if selected == "Return to Main Menu":
             return "__CANCEL__"
-        print(f"\033[1A\033[2KSelect customer: \033[1;38;5;214m{selected['name']}\033[0m")
+        print(f"\033[1A\033[2KSelect a customer: \033[1;38;5;214m{selected['name']}\033[0m")
         return selected
 
 
@@ -3039,13 +3029,12 @@ def enter_new_customer(prefill_name="", raw_rows=None):
             return None
 
         # Edit a field — questionary arrow-key selection, re-displays block on return
-        print()
         field = questionary.select(
             "",
             choices=["Name", "Phone", "Email", "City", "State / Region", "Country",
                      questionary.Separator(" "),
                      _back_choice("Cancel — no changes")],
-            qmark="Which field would you like to edit?",
+            qmark="\nWhich field would you like to edit?",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
@@ -3337,7 +3326,6 @@ def _add_single_unit():
 
     # Step 5: Pricing path (loops until valid margin or explicit cancel)
     while True:
-        print()
         path_choice = questionary.select(
             "",
             choices=[
@@ -3346,7 +3334,7 @@ def _add_single_unit():
                 questionary.Separator(" "),
                 _back_choice("Discard & exit"),
             ],
-            qmark="How would you like to set the selling price?",
+            qmark="\nHow would you like to set the selling price?",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
@@ -3355,7 +3343,7 @@ def _add_single_unit():
             return
         if "markup" in path_choice.lower():
             pricing_path = "markup"
-            pricing_value = ask_percent("Markup percentage (e.g. 60 for 60%):", allow_zero=False)
+            pricing_value = ask_percent("Markup Percentage (e.g. 60 for 60%):", allow_zero=False)
         else:
             pricing_path = "usd"
             pricing_value = ask_number("Selling Price (USD):", allow_zero=False)
@@ -3510,7 +3498,7 @@ def _add_bulk_units(batch_size):
     so Ctrl+C at any point during entry safely discards the whole
     in-progress batch via the app's existing top-level interrupt handler.
     """
-    print(f"\n--- BULK INTAKE MODE ({batch_size} units) ---")
+    print(f"\n--- \033[1;38;5;124mBULK INTAKE MODE ({batch_size} units)\033[0m ---")
 
     # Batch-common fields
     source_sheet = ask_text("Source Sheet + Tab (e.g. 'Sheet1 - Tab2'):", blank_message="This field cannot be left blank. Please enter a sheet reference.")
@@ -3552,7 +3540,7 @@ def _add_bulk_units(batch_size):
     # instead of being permanently burned.
     batch_reserved_skus = set()
     for i in range(1, batch_size + 1):
-        print(f"\n--- UNIT INTAKE ({i} of {batch_size}) ---")
+        print(f"\n--- \033[1;38;5;124mUNIT INTAKE ({i} of {batch_size})\033[0m ---")
         print()
 
         weave_type, category_code = select_or_add_weave_type()
@@ -3607,7 +3595,6 @@ def _add_bulk_units(batch_size):
         skipped = False
         pricing = None
         while True:
-            print()
             path_choice = questionary.select(
                 "",
                 choices=[
@@ -3616,7 +3603,7 @@ def _add_bulk_units(batch_size):
                     questionary.Separator(" "),
                     _back_choice("Skip this unit"),
                 ],
-                qmark="How would you like to set the selling price?",
+                qmark="\nHow would you like to set the selling price?",
                 instruction=" ",
                 style=_MENU_STYLE,
             ).unsafe_ask()
@@ -3625,7 +3612,7 @@ def _add_bulk_units(batch_size):
                 break
             if "markup" in path_choice.lower():
                 pricing_path = "markup"
-                pricing_value = ask_percent("Markup percentage (e.g. 60 for 60%):", allow_zero=False)
+                pricing_value = ask_percent("Markup Percentage (e.g. 60 for 60%):", allow_zero=False)
             else:
                 pricing_path = "usd"
                 pricing_value = ask_number("Selling Price (USD):", allow_zero=False)
@@ -3769,7 +3756,7 @@ def _add_bulk_units(batch_size):
 
     _summary_sections = []
     for garment_type in sorted(groups.keys()):
-        _rows = [f"  {'SKU':<16}{'Weave Type':<24}{'Total Cost':<13}{'Selling Price':<15}{'Markup':<9}{'Gross Profit':<15}Margin"]
+        _rows = [f"  \033[1m{'SKU':<16}{'Weave Type':<24}{'Total Cost':<13}{'Selling Price':<15}{'Markup':<9}{'Gross Profit':<15}Margin\033[0m"]
         for u in groups[garment_type]:
             cost_str   = f"${u['total_cost_usd']:,.2f}"
             price_str  = f"${u['selling_price_usd']:,.2f}"
@@ -3851,16 +3838,15 @@ def ask_payment_method():
     method = questionary.select(
         "",
         choices=["Cash", "Digital Transfer (CashApp, PayPal, Venmo, Zelle)", "Point-of-Sale (POS)"],
-        qmark="Method of Payment:",
+        qmark="\nMethod of Payment:",
         instruction=" ",
         style=_MENU_STYLE,
     ).unsafe_ask()
     if method == "Digital Transfer (CashApp, PayPal, Venmo, Zelle)":
-        print()
         method = questionary.select(
             "",
             choices=["Zelle", "Venmo", "PayPal", "CashApp"],
-            qmark="Digital transfer method:",
+            qmark="\nDigital transfer method:",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
@@ -3972,11 +3958,10 @@ def _record_single_sale():
                   future_msg="Sales cannot be recorded in the future. Please enter a current or past date.")
     date_sold_str = date_sold.strftime("%m-%d-%Y")
 
-    print()
     sales_channel = questionary.select(
         "",
         choices=SALES_CHANNELS + [questionary.Separator(" "), _back_choice("Return to Main Menu")],
-        qmark="Sales Channel:",
+        qmark="\nSales Channel:",
         instruction=" ",
         style=_MENU_STYLE,
     ).unsafe_ask()
@@ -4023,7 +4008,7 @@ def _record_single_sale():
     total_cost_usd = _sheet_float(row["Total Cost (USD)"])
 
     if has_discount:
-        discount_pct = ask_percent("Discount percentage:", allow_zero=False)
+        discount_pct = ask_percent("Discount Percentage:", allow_zero=False)
 
     # Step 5: Recalculate pricing with discount; alerts only fire when a discount was entered
     if not has_discount:
@@ -4076,7 +4061,7 @@ def _record_single_sale():
                 print("\nSale cancelled. Returning to Main Menu.")
                 return
             if alert_choice == "Re-enter discount percentage":
-                discount_pct = ask_percent("Discount percentage:", allow_zero=False)
+                discount_pct = ask_percent("Discount Percentage:", allow_zero=False)
                 continue
             if alert_choice == "Remove discount and proceed at full price":
                 discount_pct = None
@@ -4096,7 +4081,7 @@ def _record_single_sale():
         payment_choice = questionary.select(
             "",
             choices=["Paid in full", "Partial payment"],
-            qmark="Payment status:",
+            qmark="Payment Status:",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
@@ -4126,7 +4111,6 @@ def _record_single_sale():
             new_status = "Sold - Partial Payment"
 
     # Step 7: Payment method
-    print()
     payment_method = ask_payment_method()
 
     # Step 8: Confirmation summary
@@ -4852,7 +4836,6 @@ def reprice_unit():
     # Step 4: Pricing path (loops until confirmed or cancelled)
     _sep = f"\033[2m{'—' * 50}\033[0m"
     while True:
-        print()
         path_choice = questionary.select(
             "",
             choices=[
@@ -4861,7 +4844,7 @@ def reprice_unit():
                 questionary.Separator(" "),
                 _back_choice("Discard & exit"),
             ],
-            qmark="How would you like to set the new selling price?",
+            qmark="\nHow would you like to set the new selling price?",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
@@ -4869,7 +4852,7 @@ def reprice_unit():
             print("\nReprice cancelled. Returning to Main Menu.")
             return
         if "markup" in path_choice.lower():
-            pricing_value = ask_percent("New markup percentage:", allow_zero=False)
+            pricing_value = ask_percent("New Markup Percentage:", allow_zero=False)
             pricing_path = "markup"
         else:
             pricing_value = ask_number("New Selling Price (USD):", allow_zero=False)
@@ -4978,7 +4961,7 @@ def edit_inventory_details():
     Correct an existing Available or Reserved unit's acquisition-side
     details -- Weave Type/Category Code/SKU are deliberately excluded
     (SKU's category-code prefix would go stale), Status is excluded (owned
-    by Record a Sale/Cancel a Sale/Manage Reservation), and Selling Price
+    by Record a Sale/Cancel a Sale/Manage a Reservation), and Selling Price
     is excluded (owned by Reprice a Unit). Unassigned units are excluded
     too -- Add Inventory's own Unassigned-reuse path already owns "fill in
     a blank unit's details", so this operation would just be a second way
@@ -5502,7 +5485,7 @@ def edit_inventory_details():
             return True
 
         if field == "Inventory Notes":
-            new_note = ask_text("Additional note (press Enter to skip):", required=False)
+            new_note = ask_text("Additional Note (press Enter to skip):", required=False)
             if not new_note:
                 print("\n\033[33mNo change.\033[0m")
                 return None
@@ -5815,13 +5798,12 @@ def discount_simulator():
     # ── Sub-menu loop ──────────────────────────────────────────────────────────
     print("\n--- \033[1;38;5;124mDISCOUNT SIMULATOR\033[0m ---")
     while True:
-        print()
         mode = questionary.select(
             "",
             choices=["Look up an existing unit", "Simulate with custom figures",
                      questionary.Separator(" "),
                      _back_choice("Return to Main Menu")],
-            qmark="Select an option:",
+            qmark="\nSelect an option:",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
@@ -5959,7 +5941,6 @@ def discount_simulator():
             restart_pricing = True
             while restart_pricing:  # pricing loop
                 restart_pricing = False
-                print()
                 path = questionary.select(
                     "",
                     choices=[
@@ -5968,14 +5949,14 @@ def discount_simulator():
                         questionary.Separator(" "),
                         _back_choice("Discard & exit"),
                     ],
-                    qmark="How would you like to set the selling price?",
+                    qmark="\nHow would you like to set the selling price?",
                     instruction=" ",
                     style=_MENU_STYLE,
                 ).unsafe_ask()
                 if path == "Discard & exit":
                     break
                 if "markup" in path.lower():
-                    markup_val = ask_percent("Markup percentage:", allow_zero=False)
+                    markup_val = ask_percent("Markup Percentage:", allow_zero=False)
                     selling_price_usd = round(total_cost_usd * (1 + markup_val / 100), 2)
                 else:
                     selling_price_usd = ask_number("Selling Price (USD):", allow_zero=False)
@@ -6025,7 +6006,7 @@ def discount_simulator():
 
 def record_outstanding_payment():
     """Record a payment against a Sold - Partial Payment unit."""
-    print("\n--- \033[1;38;5;124mRECORD OUTSTANDING PAYMENT\033[0m ---")
+    print("\n--- \033[1;38;5;124mRECORD AN OUTSTANDING PAYMENT\033[0m ---")
     while True:  # outer loop: "Record another payment?"
         rows = get_all_rows()
         partial_rows = [r for r in rows if r.get("Status", "").strip() == "Sold - Partial Payment"]
@@ -6099,13 +6080,12 @@ def record_outstanding_payment():
         # Entry menu
         selected_row = None
         while selected_row is None:
-            print()
             nav = questionary.select(
                 "",
                 choices=["Enter by SKU", "Filter by customer",
                          questionary.Separator(" "),
                          _back_choice("Return to Main Menu")],
-                qmark="How would you like to select a unit?",
+                qmark="\nHow would you like to select a unit?",
                 instruction=" ",
                 style=_MENU_STYLE,
             ).unsafe_ask()
@@ -6126,14 +6106,13 @@ def record_outstanding_payment():
                     if len(matches) == 1:
                         chosen_sku = matches[0]
                     else:
-                        print()
                         chosen_sku = questionary.select(
                             "",
                             choices=matches + [
                                 questionary.Separator(" "),
                                 _back_choice("Change selection method"),
                             ],
-                            qmark="Select a unit:",
+                            qmark="\nSelect a unit:",
                             instruction=" ",
                             style=_MENU_STYLE,
                         ).unsafe_ask()
@@ -6146,7 +6125,7 @@ def record_outstanding_payment():
                 # Grouped by identity (see _customer_identity_key), not by
                 # Customer Name alone -- two different customers who share
                 # a name get separate entries here as long as either has a
-                # phone or email on file, same as the Customer Insights
+                # phone or email on file, same as the View Customer Insights
                 # picker. Location is shown alongside each name so those
                 # entries are actually distinguishable in the list, not
                 # just correctly separated behind the scenes.
@@ -6174,7 +6153,7 @@ def record_outstanding_payment():
                 selected_customer = None
                 want_nav_back = False
                 while selected_customer is None:
-                    query = input(f"\n\001\033[1m\002Customer search (or press Enter to see all):\001\033[0m\002 {_ANSWER_COLOR}").strip()
+                    query = input(f"\n\001\033[1m\002Customer Search (or press Enter to see all):\001\033[0m\002 {_ANSWER_COLOR}").strip()
                     print("\033[0m", end="")
                     if _looks_like_phone_query(query):
                         _warn("Customer names cannot be numbers. Please enter a name or press Enter to see all.")
@@ -6189,7 +6168,6 @@ def record_outstanding_payment():
                     if len(filtered) == 1:
                         selected_customer = filtered[0]
                     else:
-                        print()
                         col_width = max(len(c["name"]) for c in filtered) + 4
                         choices = []
                         for c in filtered:
@@ -6202,13 +6180,14 @@ def record_outstanding_payment():
                                 questionary.Separator(" "),
                                 _back_choice("Change selection method"),
                             ],
-                            qmark="Select a customer:",
+                            qmark="\nSelect a customer:",
                             instruction=" ",
                             style=_FILTER_STYLE,
                         ).unsafe_ask()
                         if selected_customer is None or selected_customer == "Change selection method":
                             want_nav_back = True
                             break
+                        print(f"\033[1A\033[2KSelect a customer: \033[1;38;5;214m{selected_customer['name']}\033[0m")
 
                 if want_nav_back:
                     continue  # back to nav menu
@@ -6224,14 +6203,13 @@ def record_outstanding_payment():
                 if len(sku_options) == 1:
                     chosen_sku = sku_options[0]
                 else:
-                    print()
                     chosen_sku = questionary.select(
                         "",
                         choices=sku_options + [
                             questionary.Separator(" "),
                             _back_choice("Change selection method"),
                         ],
-                        qmark=f"Outstanding units for {selected_customer['name']}:",
+                        qmark=f"\nOutstanding units for {selected_customer['name']}:",
                         instruction=" ",
                         style=_MENU_STYLE,
                     ).unsafe_ask()
@@ -6295,12 +6273,12 @@ def record_outstanding_payment():
         ])
 
         # Step 4 — Payment date
-        payment_date_str = ask_date("Payment date", not_future=True).strftime("%m-%d-%Y")
+        payment_date_str = ask_date("Payment Date", not_future=True).strftime("%m-%d-%Y")
 
         # Step 4a — Payment entry
         payment = None
         while payment is None:
-            payment = ask_number("Payment received (USD):", allow_zero=False)
+            payment = ask_number("Payment Received (USD):", allow_zero=False)
             if payment > round(amount_outstanding, 2):
                 _warn(
                     f"This amount exceeds the outstanding balance of ${amount_outstanding:,.2f}. "
@@ -6398,7 +6376,7 @@ def record_outstanding_payment():
         if new_outstanding == 0:
             print(f"\n\033[38;5;202m✓ {sku} — payment of ${payment:,.2f} recorded. Balance fully settled.\033[0m")
         else:
-            print(f"\n{sku} — payment of ${payment:,.2f} recorded. ${new_outstanding:,.2f} still outstanding.")
+            print(f"\n\033[38;5;202m✓ {sku} — payment of ${payment:,.2f} recorded. ${new_outstanding:,.2f} still outstanding.\033[0m")
 
         if not ask_yes_no("Record another payment?"):
             return
@@ -6694,7 +6672,7 @@ def cancel_sale():
 
 
 def manage_reservation():
-    print("\n--- \033[1;38;5;124mMANAGE RESERVATION\033[0m ---")
+    print("\n--- \033[1;38;5;124mMANAGE A RESERVATION\033[0m ---")
 
     # Overdue reservation sweep — surfaces expired holds before SKU entry
     _all_rows = get_all_rows()
@@ -6818,7 +6796,7 @@ def manage_reservation():
                     _initial_name  = None
                 else:
                     _initial_name  = None
-                    reserver_name = ask_text("Reserver's name:")
+                    reserver_name = ask_text("Reserver's Name:")
                 if " " not in reserver_name.strip():
                     print(f"\n\033[33m⚠  SINGLE NAME DETECTED\033[0m")
                     print(f"\033[2m{'—' * 50}\033[0m")
@@ -6919,7 +6897,7 @@ def manage_reservation():
         _res_color   = get_status_color("Reserved")
         _av_color    = get_status_color("Available")
 
-        release_note = ask_text("Release note (press Enter to skip):", required=False)
+        release_note = ask_text("Release Note (press Enter to skip):", required=False)
 
         _release_action_rows = [
             f"  \033[1m{'Reserved Date:':<18}\033[0m{reserved_date_display}",
@@ -6984,11 +6962,10 @@ def _pick_report_year(today, years, prompt="Select a year:"):
     Returns the chosen year, or None if the user backed out — the caller
     loops back to whatever prompt came before this one rather than exiting
     the whole flow."""
-    print()
     choice = questionary.select(
         "",
         choices=[str(yr) for yr in years] + [questionary.Separator(" "), _back_choice()],
-        qmark=prompt, instruction=" ", style=_MENU_STYLE,
+        qmark=f"\n{prompt}", instruction=" ", style=_MENU_STYLE,
     ).unsafe_ask()
     if choice is None or choice == "Back":
         return None
@@ -7014,11 +6991,10 @@ def _pick_monthly_period(today, _cal):
             _warn(f"No completed months yet in {yr}.")
             continue
         month_labels = [date(yr, mo, 1).strftime("%B") for mo in range(1, last_month + 1)]
-        print()
         choice = questionary.select(
             "",
             choices=month_labels + [questionary.Separator(" "), _back_choice()],
-            qmark=f"Select a month in {yr}:", instruction=" ", style=_MENU_STYLE,
+            qmark=f"\nSelect a month in {yr}:", instruction=" ", style=_MENU_STYLE,
         ).unsafe_ask()
         if choice is None or choice == "Back":
             continue
@@ -7043,11 +7019,10 @@ def _pick_quarterly_period(today, _cal):
             _warn(f"No completed quarters yet in {yr}.")
             continue
         quarter_labels = [f"Q{q}" for q in range(1, last_q + 1)]
-        print()
         choice = questionary.select(
             "",
             choices=quarter_labels + [questionary.Separator(" "), _back_choice()],
-            qmark=f"Select a quarter in {yr}:", instruction=" ", style=_MENU_STYLE,
+            qmark=f"\nSelect a quarter in {yr}:", instruction=" ", style=_MENU_STYLE,
         ).unsafe_ask()
         if choice is None or choice == "Back":
             continue
@@ -7071,13 +7046,13 @@ def _pick_annual_period(today):
 
 def _pick_custom_range():
     while True:
-        start = ask_date("Start date", not_future=True,
+        start = ask_date("Start Date", not_future=True,
                           not_before=date(BUSINESS_START_YEAR, 1, 1),
                           not_before_msg=f"Date cannot be before {BUSINESS_START_YEAR}, when the business began.",
                           allow_back=True)
         if start is None:
             return None
-        end = ask_date("End date", not_future=True, not_before=start,
+        end = ask_date("End Date", not_future=True, not_before=start,
                         not_before_msg="End date must be on or after start date.",
                         allow_back=True)
         if end is None:
@@ -7350,13 +7325,12 @@ def _pick_customer_period():
     view is wanted rather than silently looping the menu again."""
     import calendar as _cal
     today = date.today()
-    print()
     period_choice = questionary.select(
         "",
         choices=["Monthly", "Quarterly", "Annual", "Custom",
                  questionary.Separator(" "),
                  _back_choice()],
-        qmark="Select a period type:", instruction=" ", style=_MENU_STYLE,
+        qmark="\nSelect a period type:", instruction=" ", style=_MENU_STYLE,
     ).unsafe_ask()
     if period_choice is None or period_choice == "Back":
         return None
@@ -7388,7 +7362,7 @@ def _run_insights_for_customer(customer, all_rows):
 
 
 def customer_insights():
-    print("\n--- \033[1;38;5;124mCUSTOMER INSIGHTS\033[0m ---")
+    print("\n--- \033[1;38;5;124mVIEW CUSTOMER INSIGHTS\033[0m ---")
     raw_rows = get_raw_rows()
 
     while True:  # "Look up another customer?" loop
@@ -7445,13 +7419,12 @@ def generate_report_menu():
     today = date.today()
 
     while True:
-        print()
         period_choice = questionary.select(
             "",
             choices=["Monthly", "Quarterly", "Annual", "Custom",
                      questionary.Separator(" "),
                      _back_choice("Return to Main Menu")],
-            qmark="Select a period type:",
+            qmark="\nSelect a period type:",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
@@ -7915,7 +7888,6 @@ def generate_product_description():
             _print_boxed(f"{sibling} VERSION {_p_version_num}", [
                 (_p_name, _wrap_text_block(_p_body)) for _p_name, _p_body in _p_versions.items()
             ])
-            print()
             _p_action = questionary.select(
                 "",
                 choices=[
@@ -7924,7 +7896,7 @@ def generate_product_description():
                     questionary.Separator(" "),
                     _back_choice("Return to Main Menu"),
                 ],
-                qmark=f"What next? (Version {_p_version_num} -- refining again uses another API call)", instruction=" ", style=_MENU_STYLE,
+                qmark=f"\nWhat next? (Version {_p_version_num} -- refining again uses another API call)", instruction=" ", style=_MENU_STYLE,
             ).unsafe_ask()
             if _p_action is None or _p_action == "Return to Main Menu":
                 print(f"\n{sibling.capitalize()} sync cancelled. Nothing changed for that channel.")
@@ -8189,7 +8161,6 @@ def generate_product_description():
         _print_boxed(f"VERSION {version_num} — {_version_mode}", [
             (name, _wrap_text_block(body)) for name, body in versions.items()
         ])
-        print()
         action = questionary.select(
             "",
             choices=[
@@ -8198,7 +8169,7 @@ def generate_product_description():
                 questionary.Separator(" "),
                 _back_choice("Return to Main Menu"),
             ],
-            qmark=f"What next? (Version {version_num} -- refining again uses another API call)", instruction=" ", style=_MENU_STYLE,
+            qmark=f"\nWhat next? (Version {version_num} -- refining again uses another API call)", instruction=" ", style=_MENU_STYLE,
         ).unsafe_ask()
         if action is None or action == "Return to Main Menu":
             print("\nCancelled. Nothing was written.")
@@ -8481,12 +8452,12 @@ def main_menu():
         print("\033[2m1.\033[0m  Add inventory")
         print("\033[2m2.\033[0m  Edit inventory details")
         print("\033[2m3.\033[0m  Reprice a unit")
-        print("\033[2m4.\033[0m  Discount simulator")
-        print("\033[2m5.\033[0m  Manage reservation")
+        print("\033[2m4.\033[0m  Simulate a discount")
+        print("\033[2m5.\033[0m  Manage a reservation")
         print("\033[2m6.\033[0m  Record a sale")
-        print("\033[2m7.\033[0m  Record outstanding payment")
+        print("\033[2m7.\033[0m  Record an outstanding payment")
         print("\033[2m8.\033[0m  Cancel a sale")
-        print("\033[2m9.\033[0m  Customer insights")
+        print("\033[2m9.\033[0m  View customer insights")
         print("\033[2m10.\033[0m Generate report")
         print("\033[2m11.\033[0m Generate product description")
         print()
