@@ -413,8 +413,11 @@ def start_session(unit_facts, weave_type, raw_notes, channel, photo_paths=None, 
     """First turn, for a single channel -- this operation generates and
     refines exactly one description at a time, matching the same
     single-locus-of-attention shape as every other operation in this app.
-    Returns (messages, response_text, system) -- pass all three into
-    continue_session() for every subsequent round."""
+    Returns (messages, response_text, system, truncated) -- pass the first
+    three into continue_session() for every subsequent round. truncated is
+    True if the response hit max_tokens before finishing -- this module
+    never prints anything itself (inventory.py owns all user-facing
+    output), so the caller is responsible for warning the operator."""
     import anthropic
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     brand_context = _load_brand_context()
@@ -435,10 +438,10 @@ def start_session(unit_facts, weave_type, raw_notes, channel, photo_paths=None, 
     content.append({"type": "text", "text": user_text})
 
     messages = [{"role": "user", "content": content}]
-    resp = client.messages.create(model=MODEL, max_tokens=4096, system=system, messages=messages)
+    resp = client.messages.create(model=MODEL, max_tokens=8192, system=system, messages=messages)
     text = next((b.text for b in resp.content if b.type == "text"), "")
     messages.append({"role": "assistant", "content": text})
-    return messages, text, system
+    return messages, text, system, resp.stop_reason == "max_tokens"
 
 def start_patch_session(unit_facts, weave_type, channel, existing_text, correction_instruction):
     """Seeds a fresh session from an already-generated, already-saved
@@ -447,9 +450,9 @@ def start_patch_session(unit_facts, weave_type, channel, existing_text, correcti
     changed while generating a different channel for the same unit)
     rather than a generation from scratch. Skips the completeness check
     entirely: the existing text is already complete, this is a targeted
-    edit to it, not a new draft. Returns (messages, response_text, system),
-    the same shape as start_session(), so the caller can feed it into the
-    same refinement loop unchanged."""
+    edit to it, not a new draft. Returns (messages, response_text, system,
+    truncated), the same shape as start_session(), so the caller can feed
+    it into the same refinement loop unchanged."""
     import anthropic
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     brand_context = _load_brand_context()
@@ -463,10 +466,10 @@ def start_patch_session(unit_facts, weave_type, channel, existing_text, correcti
         f"description, not a new draft -- and go straight to VERSION 1."
     )
     messages = [{"role": "user", "content": user_text}]
-    resp = client.messages.create(model=MODEL, max_tokens=4096, system=system, messages=messages)
+    resp = client.messages.create(model=MODEL, max_tokens=8192, system=system, messages=messages)
     text = next((b.text for b in resp.content if b.type == "text"), "")
     messages.append({"role": "assistant", "content": text})
-    return messages, text, system
+    return messages, text, system, resp.stop_reason == "max_tokens"
 
 def start_revision_session(unit_facts, weave_type, channel, existing_text, notes, photo_paths=None):
     """Seeds a fresh session from an already-generated, already-saved
@@ -482,9 +485,10 @@ def start_revision_session(unit_facts, weave_type, channel, existing_text, notes
     regeneration can come with new photos this time even though the
     caption it's built from didn't have them. Skips the completeness
     check entirely: there's already a complete caption to revise, this
-    isn't a first draft. Returns (messages, response_text, system), the
-    same shape as start_session() and start_patch_session(), so the
-    caller can feed it into the same refinement loop unchanged."""
+    isn't a first draft. Returns (messages, response_text, system,
+    truncated), the same shape as start_session() and
+    start_patch_session(), so the caller can feed it into the same
+    refinement loop unchanged."""
     import anthropic
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     brand_context = _load_brand_context()
@@ -507,22 +511,25 @@ def start_revision_session(unit_facts, weave_type, channel, existing_text, notes
     content.append({"type": "text", "text": user_text})
 
     messages = [{"role": "user", "content": content}]
-    resp = client.messages.create(model=MODEL, max_tokens=4096, system=system, messages=messages)
+    resp = client.messages.create(model=MODEL, max_tokens=8192, system=system, messages=messages)
     text = next((b.text for b in resp.content if b.type == "text"), "")
     messages.append({"role": "assistant", "content": text})
-    return messages, text, system
+    return messages, text, system, resp.stop_reason == "max_tokens"
 
 def continue_session(messages, system, user_text):
     """Appends user_text as the next turn (her refinement instruction, or
     her answers to a completeness follow-up) and returns the updated
-    messages list plus the new response text."""
+    messages list, the new response text, and whether the response was
+    truncated (hit max_tokens before finishing) -- this module never
+    prints anything itself, so the caller is responsible for warning the
+    operator."""
     import anthropic
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     messages = messages + [{"role": "user", "content": user_text}]
-    resp = client.messages.create(model=MODEL, max_tokens=4096, system=system, messages=messages)
+    resp = client.messages.create(model=MODEL, max_tokens=8192, system=system, messages=messages)
     text = next((b.text for b in resp.content if b.type == "text"), "")
     messages = messages + [{"role": "assistant", "content": text}]
-    return messages, text
+    return messages, text, resp.stop_reason == "max_tokens"
 
 
 # -----------------------------------------------------------------------

@@ -8148,7 +8148,9 @@ def generate_product_description():
             answer = ask_long_text("What would you like to change? (can reference an earlier version by number)")
             print("\n\033[2mThinking...\033[0m")
             try:
-                messages, new_text = dg.continue_session(messages, system, answer)
+                messages, new_text, truncated = dg.continue_session(messages, system, answer)
+                if truncated:
+                    _warn("The response may have been cut short -- review it carefully before locking it in.")
             except Exception as e:
                 _warn(f"Refinement failed: {e}")
                 return "keep", messages, None
@@ -8170,9 +8172,11 @@ def generate_product_description():
         sibling_channel = sibling.lower()
         print("\n\033[2mThinking...\033[0m")
         try:
-            _p_messages, _p_text, _p_system = dg.start_patch_session(
+            _p_messages, _p_text, _p_system, _p_truncated = dg.start_patch_session(
                 unit_facts, weave_type, sibling_channel, sibling_text, correction_instruction
             )
+            if _p_truncated:
+                _warn("The response may have been cut short -- review it carefully before locking it in.")
         except Exception as e:
             _warn(f"Sync failed: {e}")
             return False
@@ -8252,7 +8256,9 @@ def generate_product_description():
             _p_feedback = ask_long_text("What would you like to change? (can reference an earlier version by number)")
             print("\n\033[2mThinking...\033[0m")
             try:
-                _p_messages, _p_new_text = dg.continue_session(_p_messages, _p_system, _p_feedback)
+                _p_messages, _p_new_text, _p_new_truncated = dg.continue_session(_p_messages, _p_system, _p_feedback)
+                if _p_new_truncated:
+                    _warn("The response may have been cut short -- review it carefully before locking it in.")
             except Exception as e:
                 _warn(f"Refinement failed: {e}")
                 continue
@@ -8359,23 +8365,31 @@ def generate_product_description():
     print("\n\033[2mThinking...\033[0m")
     try:
         if _regenerating_text:
-            messages, text, system = dg.start_revision_session(
+            messages, text, system, truncated = dg.start_revision_session(
                 unit_facts, weave_type, channel, _regenerating_text, notes, photo_paths
             )
         else:
-            messages, text, system = dg.start_session(unit_facts, weave_type, notes, channel, photo_paths)
+            messages, text, system, truncated = dg.start_session(unit_facts, weave_type, notes, channel, photo_paths)
+        if truncated:
+            _warn("The response may have been cut short -- review it carefully before locking it in.")
     except Exception as e:
         _warn(f"Description generation failed: {e}")
         return
 
     # Step 6: completeness loop -- her own override always wins.
-    # A response counts as done once it either says so explicitly
-    # (COMPLETENESS: sufficient) or has actually produced a VERSION block --
-    # the "Generate anyway, as-is" override tells Claude to skip the
-    # completeness check entirely and go straight to VERSION 1, so that
-    # response never contains a COMPLETENESS line at all. Checking
-    # sufficient alone would misread that as still-incomplete and loop
-    # the menu forever even though a real description already exists.
+    # A response counts as done once it has actually produced a parseable
+    # VERSION block -- Claude's own "COMPLETENESS: sufficient" self-
+    # declaration is informational only, not an independent exit condition.
+    # "sufficient" is supposed to mean "I have enough info, so I'm
+    # generating the draft now," but if Claude also malforms the VERSION
+    # marker itself in that same response (e.g. bold-wraps it), trusting
+    # "sufficient" alone would exit this loop with no real draft to show --
+    # straight into an empty VERSION box with no indication anything went
+    # wrong. The "Generate anyway, as-is" override (which skips the
+    # completeness check entirely and produces no COMPLETENESS line at all)
+    # already relied on parse_versions() to detect a real draft, not on
+    # "sufficient" -- this makes that the one consistent exit condition for
+    # every path instead of two separate mechanisms.
     MAX_COMPLETENESS_ROUNDS = 2  # rounds of "Answer these now" before generating
                                   # with what's there regardless -- more abstract
                                   # Q&A rounds cost more time than just seeing a
@@ -8384,7 +8398,7 @@ def generate_product_description():
     completeness_round = 0
     while True:
         sufficient, missing, questions = dg.parse_completeness(text)
-        if sufficient or dg.parse_versions(text):
+        if dg.parse_versions(text):
             if sufficient:
                 print("\n\033[2m✓ Completeness check: sufficient -- generating a draft.\033[0m")
             break
@@ -8432,7 +8446,9 @@ def generate_product_description():
             next_input = ask_long_text("Your answer(s):", blank_message="Please enter an answer, or choose a different option above.")
         print("\n\033[2mThinking...\033[0m")
         try:
-            messages, text = dg.continue_session(messages, system, next_input)
+            messages, text, truncated = dg.continue_session(messages, system, next_input)
+            if truncated:
+                _warn("The response may have been cut short -- review it carefully before locking it in.")
         except Exception as e:
             _warn(f"Description generation failed: {e}")
             return
@@ -8492,7 +8508,9 @@ def generate_product_description():
         feedback = ask_long_text("What would you like to change? (can reference an earlier version by number)")
         print("\n\033[2mThinking...\033[0m")
         try:
-            messages, new_text = dg.continue_session(messages, system, feedback)
+            messages, new_text, new_truncated = dg.continue_session(messages, system, feedback)
+            if new_truncated:
+                _warn("The response may have been cut short -- review it carefully before locking it in.")
         except Exception as e:
             _warn(f"Refinement failed: {e}")
             continue
