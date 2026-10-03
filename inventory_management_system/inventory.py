@@ -1388,13 +1388,15 @@ _HERO_WEAVE_KEYWORDS = ("Kanjivaram", "Gadwal", "Banaras", "Benaras")
 
 def _is_hero_weave(weave_type):
     """Hero/high-exclusivity margin tier: the Kanjivaram, Gadwal, and
-    Banaras families specifically -- flagship, signature weaves the
-    brand positions above the standard catalog. Blouses never qualify
-    even when a hero family name appears in their own name (e.g.
-    "Kanjivaram Silk Blouse") -- they're an accessory piece, not the
-    hero saree itself. Ikat is deliberately excluded too, even when a
-    brand is moving it upmarket, since it isn't one of the three named
-    hero weaves."""
+    Banaras families specifically -- named as hero/signature weaves in
+    the original brand checklist, confirmed again by name in the
+    client's margin-threshold answer (2026-09-06), and together making
+    up 71% of inventory. Blouses never qualify even when a hero family
+    name appears in their own name (e.g. "Kanjivaram Silk Blouse") --
+    they're an accessory piece, not the hero saree itself. Ikat is
+    deliberately excluded too, even though the brand is moving it
+    upmarket, since it was never named alongside the three hero weaves
+    (open question with the client as of 2026-09-06)."""
     if WEAVE_GARMENT_TYPES.get(weave_type) == "Blouse":
         return False
     return any(kw in weave_type for kw in _HERO_WEAVE_KEYWORDS)
@@ -1413,7 +1415,7 @@ def get_margin_color(margin_pct, weave_type):
     (Kanjivaram/Gadwal/Banaras) are held to a higher bar than
     supplemental ones. Matches the sheet's own Profit Margin %
     conditional formatting in spirit (3 tiers), but the exact cutoffs
-    differ by weave family instead of being one flat line."""
+    now differ by weave family instead of being one flat line."""
     flag, target = _margin_thresholds(weave_type)
     if margin_pct < flag:
         return "\033[31m"   # red
@@ -1772,9 +1774,16 @@ def select_or_add_weave_type():
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
+        # The leading \n lives inside qmark itself, not a separate print()
+        # before this call -- questionary's own "answered" redraw reaches
+        # back up and clears everything since the widget started, including
+        # any blank line printed just before it, so a standalone print()
+        # here would get silently swallowed every time and never actually
+        # reach the screen the operator sees. A newline baked into qmark
+        # survives because it's part of what the widget itself redraws on
+        # every frame, including the final collapsed one.
 
         if selected == "Change garment type":
-            print()
             continue
 
         if selected != "Add new weave type":
@@ -5592,9 +5601,12 @@ def edit_inventory_details():
                 if col_name in ("Markup %", "(Profit) Margin %"):
                     old_pct = _pct(old_raw)
                     new_pct = new_val * 100
-                    _color = get_markup_color if col_name == "Markup %" else get_margin_color
-                    old_disp = f"{_color(old_pct)}{old_pct:.1f}%\033[0m"
-                    new_disp = f"{_color(new_pct)}{new_pct:.1f}%\033[0m"
+                    if col_name == "Markup %":
+                        old_disp = f"{get_markup_color(old_pct)}{old_pct:.1f}%\033[0m"
+                        new_disp = f"{get_markup_color(new_pct)}{new_pct:.1f}%\033[0m"
+                    else:
+                        old_disp = f"{get_margin_color(old_pct, _edit_weave_type)}{old_pct:.1f}%\033[0m"
+                        new_disp = f"{get_margin_color(new_pct, _edit_weave_type)}{new_pct:.1f}%\033[0m"
                 elif col_name == "Gross Profit (USD)":
                     old_f = _sheet_float(old_raw)
                     _old_c = "\033[92m" if old_f >= 0 else "\033[91m"
@@ -7859,7 +7871,7 @@ def generate_product_description():
             ("IDENTITY", [
                 f"  \033[1m{'SKU:':<20}\033[0m{row['SKU']}",
                 f"  \033[1m{'Weave Type:':<20}\033[0m{row.get('Category Code', '')} - {weave_type}",
-                f"  \033[1m{'Tier:':<20}\033[0m{'Hero' if hero else 'Supplemental'}",
+                f"  \033[1m{'Tier:':<20}\033[0m{'Hero (high-margin collection)' if hero else 'Supplemental (standard collection)'}",
             ]),
             ("SOURCING & AGING", [
                 f"  \033[1m{'Supplier:':<20}\033[0m{row.get('Supplier', '')}",
