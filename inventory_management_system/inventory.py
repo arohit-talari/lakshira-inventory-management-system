@@ -798,7 +798,7 @@ def _flush_stdin():
 def ask_number(prompt, allow_zero=False, allow_negative=False):
     """Return a validated float from user input."""
     while True:
-        raw = input(f"\n\033[1m{prompt}\033[0m {_ANSWER_COLOR}").strip()
+        raw = input(f"\n\001\033[1m\002{prompt}\001\033[0m\002 {_ANSWER_COLOR}").strip()
         print("\033[0m", end="")
         _flush_stdin()
         try:
@@ -836,7 +836,7 @@ def ask_date(prompt, not_future=False, not_before=None, not_after=None,
     """
     while True:
         suffix = " (Type 'back' to cancel)" if allow_back else ""
-        raw = input(f"\n\033[1m{prompt} (MM-DD-YYYY){suffix}:\033[0m {_ANSWER_COLOR}").strip()
+        raw = input(f"\n\001\033[1m\002{prompt} (MM-DD-YYYY){suffix}:\001\033[0m\002 {_ANSWER_COLOR}").strip()
         print("\033[0m", end="")
         _flush_stdin()
         if allow_back and raw.lower() == "back":
@@ -863,7 +863,7 @@ def ask_date(prompt, not_future=False, not_before=None, not_after=None,
 def ask_yes_no(prompt):
     """Return True for yes, False for no."""
     while True:
-        raw = input(f"\n\033[1m{prompt} (yes/no):\033[0m {_ANSWER_COLOR}").strip().lower()
+        raw = input(f"\n\001\033[1m\002{prompt} (yes/no):\001\033[0m\002 {_ANSWER_COLOR}").strip().lower()
         print("\033[0m", end="")
         _flush_stdin()
         if raw in ("yes", "y"):
@@ -989,7 +989,7 @@ def _print_boxed(title, sections):
 def ask_text(prompt, required=True, blank_message="This field cannot be left blank. Please enter a value."):
     """Return a non-empty string (or empty string if not required)."""
     while True:
-        raw = " ".join(input(f"\n\033[1m{prompt}\033[0m {_ANSWER_COLOR}").split())
+        raw = " ".join(input(f"\n\001\033[1m\002{prompt}\001\033[0m\002 {_ANSWER_COLOR}").split())
         print("\033[0m", end="")
         _flush_stdin()
         if raw:
@@ -1039,7 +1039,7 @@ def ask_long_text(prompt, required=True, blank_message="This field cannot be lef
 def ask_percent(prompt, allow_zero=True):
     """Return a validated float between 0 and 100."""
     while True:
-        raw = input(f"\n\033[1m{prompt}\033[0m {_ANSWER_COLOR}").strip()
+        raw = input(f"\n\001\033[1m\002{prompt}\001\033[0m\002 {_ANSWER_COLOR}").strip()
         print("\033[0m", end="")
         _flush_stdin()
         try:
@@ -1085,7 +1085,7 @@ def ask_contact_method():
 
         elif contact_type == "Instagram":
             while True:
-                raw = input(f"\n\033[1mInstagram handle:\033[0m @{_ANSWER_COLOR}").strip()
+                raw = input(f"\n\001\033[1m\002Instagram handle:\001\033[0m\002 @{_ANSWER_COLOR}").strip()
                 print("\033[0m", end="")
                 if not raw:
                     _warn("Instagram handle cannot be empty.")
@@ -1652,7 +1652,7 @@ def _enter_new_garment_type():
     Returns the resolved garment type name (new or matched existing), or None (back).
     """
     while True:
-        raw = " ".join(input(f"\n\033[1mEnter new garment type name (or type 'back' to go back):\033[0m {_ANSWER_COLOR}").split())
+        raw = " ".join(input(f"\n\001\033[1m\002Enter new garment type name (or type 'back' to go back):\001\033[0m\002 {_ANSWER_COLOR}").split())
         print("\033[0m", end="")
         if not raw or raw.lower() == "back":
             return None
@@ -1677,7 +1677,7 @@ def _enter_new_garment_type():
             if ask_yes_no("Did you mean one of these?"):
                 while True:
                     try:
-                        idx = int(input(f"\n\033[1mSelect number:\033[0m {_ANSWER_COLOR}").strip()) - 1
+                        idx = int(input(f"\n\001\033[1m\002Select number:\001\033[0m\002 {_ANSWER_COLOR}").strip()) - 1
                         print("\033[0m", end="")
                         if 0 <= idx < len(gt_matches):
                             return gt_matches[idx]
@@ -1750,7 +1750,7 @@ def select_or_add_weave_type():
         # the "Add new" duplicate-detection flow below for where fuzzy
         # matching is the better fit instead).
         while True:
-            query = input(f"\n\033[1mSearch {garment_choice} weave types (or press Enter to see all):\033[0m {_ANSWER_COLOR}").strip()
+            query = input(f"\n\001\033[1m\002Search {garment_choice} weave types (or press Enter to see all):\001\033[0m\002 {_ANSWER_COLOR}").strip()
             print("\033[0m", end="")
             if not query:
                 display_names = filtered_names
@@ -1787,7 +1787,7 @@ def select_or_add_weave_type():
         break  # fall through to Step 3 (add-new flow) below, outside the loop
 
     # Add new weave type flow — type-first, fuzzy-match second
-    raw = " ".join(input(f"\n\033[1mEnter new weave type name (or press Enter / type 'back' to go back):\033[0m {_ANSWER_COLOR}").split())
+    raw = " ".join(input(f"\n\001\033[1m\002Enter new weave type name (or press Enter / type 'back' to go back):\001\033[0m\002 {_ANSWER_COLOR}").split())
     print("\033[0m", end="")
     if not raw or raw.lower() == "back":
         print("Returning to weave type selection.")
@@ -1847,7 +1847,7 @@ def select_or_add_weave_type():
 
     first = True
     while True:
-        prompt = "\n\033[1mEnter a new category code for this weave type (or type 'back' to go back):\033[0m " if first else "\n\033[1mTry again (or type 'back'):\033[0m "
+        prompt = "\n\001\033[1m\002Enter a new category code for this weave type (or type 'back' to go back):\001\033[0m\002 " if first else "\n\001\033[1m\002Try again (or type 'back'):\001\033[0m\002 "
         first = False
         raw = input(f"{prompt}{_ANSWER_COLOR}").strip()
         print("\033[0m", end="")
@@ -1929,7 +1929,7 @@ def select_or_add_supplier():
     # select_or_add_weave_type()'s Step 2 (substring match, not fuzzy: a
     # deliberate fragment search, not a typo-tolerant lookup).
     while True:
-        query = input(f"\n\033[1mSearch suppliers (or press Enter to see all):\033[0m {_ANSWER_COLOR}").strip()
+        query = input(f"\n\001\033[1m\002Search suppliers (or press Enter to see all):\001\033[0m\002 {_ANSWER_COLOR}").strip()
         print("\033[0m", end="")
         if not query:
             display_names = all_suppliers
@@ -1959,7 +1959,7 @@ def select_or_add_supplier():
         return chosen
 
     # Add new supplier flow — type-first, fuzzy-match second
-    raw = " ".join(input(f"\n\033[1mEnter supplier name (or press Enter / type 'back' to go back):\033[0m {_ANSWER_COLOR}").split())
+    raw = " ".join(input(f"\n\001\033[1m\002Enter supplier name (or press Enter / type 'back' to go back):\001\033[0m\002 {_ANSWER_COLOR}").split())
     print("\033[0m", end="")
     if not raw or raw.lower() == "back":
         print("Returning to supplier selection.")
@@ -2170,7 +2170,7 @@ def select_country():
     ]
 
     while True:
-        raw = input(f"\n\033[1mType to search by country name (or press Enter to go back):\033[0m {_ANSWER_COLOR}").strip()
+        raw = input(f"\n\001\033[1m\002Type to search by country name (or press Enter to go back):\001\033[0m\002 {_ANSWER_COLOR}").strip()
         print("\033[0m", end="")
         if not raw:
             return None, None
@@ -2204,7 +2204,7 @@ def select_country():
             continue
 
         while True:
-            raw_num = input(f"\n\033[1mEnter the number of your choice (or press Enter to search again):\033[0m {_ANSWER_COLOR}").strip()
+            raw_num = input(f"\n\001\033[1m\002Enter the number of your choice (or press Enter to search again):\001\033[0m\002 {_ANSWER_COLOR}").strip()
             print("\033[0m", end="")
             if not raw_num:
                 break
@@ -2377,7 +2377,7 @@ def search_and_select_customer(raw_rows, allow_new=True):
     })
 
     while True:
-        query = input(f"\n\033[1mCustomer search (or press Enter to see all):\033[0m {_ANSWER_COLOR}").strip()
+        query = input(f"\n\001\033[1m\002Customer search (or press Enter to see all):\001\033[0m\002 {_ANSWER_COLOR}").strip()
         print("\033[0m", end="")
         if _looks_like_phone_query(query):
             _warn("Customer names cannot be numbers. Please enter a name or press Enter to see all customers.")
@@ -2920,7 +2920,7 @@ def enter_new_customer(prefill_name="", raw_rows=None):
                             picked = None
                             while picked is None:
                                 try:
-                                    idx = int(input(f"\n\033[1mEnter the number of your choice:\033[0m {_ANSWER_COLOR}").strip()) - 1
+                                    idx = int(input(f"\n\001\033[1m\002Enter the number of your choice:\001\033[0m\002 {_ANSWER_COLOR}").strip()) - 1
                                     print("\033[0m", end="")
                                     if 0 <= idx < len(matches):
                                         picked = matches[idx]
@@ -3240,7 +3240,7 @@ def add_new_inventory():
     print("\n--- \033[1;38;5;124mADD NEW INVENTORY\033[0m ---")
 
     while True:
-        raw = input(f"\n\033[1mHow many units are you adding? (press Enter for 1):\033[0m {_ANSWER_COLOR}").strip()
+        raw = input(f"\n\001\033[1m\002How many units are you adding? (press Enter for 1):\001\033[0m\002 {_ANSWER_COLOR}").strip()
         print("\033[0m", end="")
         if not raw:
             batch_size = 1
@@ -3283,7 +3283,7 @@ def _add_single_unit():
 
     base_price = ask_number("Base Price + GST Tax (INR):", allow_zero=False)
     while True:
-        raw = input(f"\n\033[1mShipping Cost (INR) [default: 750]:\033[0m {_ANSWER_COLOR}").strip()
+        raw = input(f"\n\001\033[1m\002Shipping Cost (INR) [default: 750]:\001\033[0m\002 {_ANSWER_COLOR}").strip()
         print("\033[0m", end="")
         if not raw:
             shipping = 750.0
@@ -3297,7 +3297,7 @@ def _add_single_unit():
         except ValueError:
             _warn("Please enter a valid number (e.g. 750 or 0).")
     while True:
-        raw = input(f"\n\033[1mDetailing Cost (INR) (press Enter if none):\033[0m {_ANSWER_COLOR}").strip()
+        raw = input(f"\n\001\033[1m\002Detailing Cost (INR) (press Enter if none):\001\033[0m\002 {_ANSWER_COLOR}").strip()
         print("\033[0m", end="")
         if not raw:
             design = 0.0
@@ -3570,7 +3570,7 @@ def _add_bulk_units(batch_size):
 
         base_price = ask_number("Base Price + GST Tax (INR):", allow_zero=False)
         while True:
-            raw = input(f"\n\033[1mShipping Cost (INR) [default: 750]:\033[0m {_ANSWER_COLOR}").strip()
+            raw = input(f"\n\001\033[1m\002Shipping Cost (INR) [default: 750]:\001\033[0m\002 {_ANSWER_COLOR}").strip()
             print("\033[0m", end="")
             if not raw:
                 shipping = 750.0
@@ -3584,7 +3584,7 @@ def _add_bulk_units(batch_size):
             except ValueError:
                 _warn("Please enter a valid number (e.g. 750 or 0).")
         while True:
-            raw = input(f"\n\033[1mDetailing Cost (INR) (press Enter if none):\033[0m {_ANSWER_COLOR}").strip()
+            raw = input(f"\n\001\033[1m\002Detailing Cost (INR) (press Enter if none):\001\033[0m\002 {_ANSWER_COLOR}").strip()
             print("\033[0m", end="")
             if not raw:
                 design = 0.0
@@ -3872,7 +3872,7 @@ def record_sale():
     _check_leftover_batch_intent_log()
 
     while True:
-        raw = input(f"\n\033[1mHow many units are part of this sale? (press Enter for 1):\033[0m {_ANSWER_COLOR}").strip()
+        raw = input(f"\n\001\033[1m\002How many units are part of this sale? (press Enter for 1):\001\033[0m\002 {_ANSWER_COLOR}").strip()
         print("\033[0m", end="")
         if not raw:
             batch_size = 1
@@ -6117,7 +6117,7 @@ def record_outstanding_payment():
             elif nav == "Enter by SKU":
                 sku_list = sorted(r.get("SKU", "").strip() for r in all_sorted)
                 while True:
-                    raw = input(f"\n\033[1mSearch SKU (or press Enter to see all):\033[0m {_ANSWER_COLOR}").strip().upper()
+                    raw = input(f"\n\001\033[1m\002Search SKU (or press Enter to see all):\001\033[0m\002 {_ANSWER_COLOR}").strip().upper()
                     print("\033[0m", end="")
                     matches = sorted([s for s in sku_list if raw in s.upper()]) if raw else sku_list
                     if not matches:
@@ -6174,7 +6174,7 @@ def record_outstanding_payment():
                 selected_customer = None
                 want_nav_back = False
                 while selected_customer is None:
-                    query = input(f"\n\033[1mCustomer search (or press Enter to see all):\033[0m {_ANSWER_COLOR}").strip()
+                    query = input(f"\n\001\033[1m\002Customer search (or press Enter to see all):\001\033[0m\002 {_ANSWER_COLOR}").strip()
                     print("\033[0m", end="")
                     if _looks_like_phone_query(query):
                         _warn("Customer names cannot be numbers. Please enter a name or press Enter to see all.")
@@ -8492,7 +8492,7 @@ def main_menu():
         print()
         print("\033[2m12. Exit\033[0m")
         print()
-        raw = input(f"\033[1mSelect an option (1-12):\033[0m {_ANSWER_COLOR}").strip()
+        raw = input(f"\001\033[1m\002Select an option (1-12):\001\033[0m\002 {_ANSWER_COLOR}").strip()
         print("\033[0m", end="")
         try:
             if raw == "1":
