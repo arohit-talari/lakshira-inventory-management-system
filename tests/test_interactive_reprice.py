@@ -47,7 +47,7 @@ class TestHappyPath:
             _enter_reprice(child, unit["SKU"])
             child.expect("How would you like to set the new selling price\\?")
             child.send(ENTER)  # markup
-            child.expect("New markup percentage")
+            child.expect("New Markup Percentage")
             child.sendline("40")
 
             text = expect_clean(child, "How would you like to proceed\\?")
@@ -103,7 +103,7 @@ class TestRecalibrateLoop:
             _enter_reprice(child, unit["SKU"])
             child.expect("How would you like to set the new selling price\\?")
             child.send(ENTER)
-            child.expect("New markup percentage")
+            child.expect("New Markup Percentage")
             child.sendline("40")
             child.expect("How would you like to proceed\\?")
             child.send(DOWN)
@@ -111,7 +111,7 @@ class TestRecalibrateLoop:
 
             expect_clean(child, "How would you like to set the new selling price\\?")
             child.send(ENTER)
-            child.expect("New markup percentage")
+            child.expect("New Markup Percentage")
             child.sendline("50")
             child.expect("How would you like to proceed\\?")
             child.send(ENTER)
@@ -146,7 +146,7 @@ class TestCancellationPaths:
             _enter_reprice(child, unit["SKU"])
             child.expect("How would you like to set the new selling price\\?")
             child.send(ENTER)
-            child.expect("New markup percentage")
+            child.expect("New Markup Percentage")
             child.sendline("40")
             child.expect("How would you like to proceed\\?")
             child.send(ENTER)
@@ -163,7 +163,7 @@ class TestCancellationPaths:
 
 class TestStatusRejection:
     """Reprice is the strictest of all the status-gated ops -- Available
-    only, unlike Discount Simulator or Manage Reservation which also allow
+    only, unlike Simulate a Discount or Manage a Reservation which also allow
     Reserved."""
 
     def test_reserved_unit_is_rejected(self):

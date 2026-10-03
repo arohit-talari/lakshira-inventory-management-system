@@ -1,5 +1,5 @@
 """
-Tier 2 -- Manage Reservation (Op 5), driven through a real pty.
+Tier 2 -- Manage a Reservation (Op 5), driven through a real pty.
 
 Uses "Instagram" as the reserver contact method throughout (not Phone) --
 phone entry requires a country picker and length-validated digits, adding
@@ -42,7 +42,7 @@ class TestReserveHappyPath:
             _enter_manage_reservation(child, unit["SKU"])
             child.expect("Reserved Date")
             child.sendline(TODAY_STR)
-            child.expect("Customer search")
+            child.expect("Customer Search")
             child.sendline("Pytest Reserver")
             child.expect("Register as a new customer")
             child.send(ENTER)
@@ -75,7 +75,7 @@ class TestReleaseHappyPath:
         child = spawn_app()
         try:
             _enter_manage_reservation(child, unit["SKU"])
-            child.expect("Release note")
+            child.expect("Release Note")
             child.sendline("pytest release fixture")
             text = expect_clean(child, "Release this reservation\\?")
             assert "RELEASE RESERVATION SUMMARY" in text
@@ -138,7 +138,7 @@ class TestCancellationPaths:
             _enter_manage_reservation(child, unit["SKU"])
             child.expect("Reserved Date")
             child.sendline(TODAY_STR)
-            child.expect("Customer search")
+            child.expect("Customer Search")
             child.sendline("Pytest Decliner")
             child.expect("Register as a new customer")
             child.send(ENTER)
@@ -164,7 +164,7 @@ class TestCancellationPaths:
         child = spawn_app()
         try:
             _enter_manage_reservation(child, unit["SKU"])
-            child.expect("Release note")
+            child.expect("Release Note")
             child.sendline("")
             child.expect("Release this reservation\\?")
             child.sendline("no")

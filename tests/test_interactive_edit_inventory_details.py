@@ -4,7 +4,7 @@ Tier 2 -- Edit Inventory Details (Op 2), driven through a real pty.
 Each mutating test creates its own fresh unit via
 tests/fixtures_data.create_fresh_available_unit() rather than sharing one --
 this operation exists to *change* a unit's data, so tests that mutate need
-independent fixtures, unlike Discount Simulator's read-only lookups which
+independent fixtures, unlike Simulate a Discount's read-only lookups which
 could safely share one.
 
 Run: pytest tests/test_interactive_edit_inventory_details.py -v -s
@@ -41,6 +41,8 @@ class TestSimpleFieldEdit:
         try:
             _enter_edit(child, unit["SKU"])
             child.send(ENTER)  # "Supplier" is the first field
+            child.expect("Search suppliers")
+            child.sendline("")  # blank -- show all suppliers
             child.expect("Select supplier:")
             child.send(DOWN)  # pick a different supplier than the current one
             child.send(ENTER)
@@ -48,7 +50,8 @@ class TestSimpleFieldEdit:
             child.send((DOWN * 7) + ENTER)  # "Done — review changes"
 
             text = expect_clean(child, "Apply these changes\\?")
-            assert f"PROPOSED CHANGES — {unit['SKU']}" in text
+            assert "EDIT SUMMARY" in text
+            assert unit["SKU"] in text
             assert original_supplier in text
 
             child.send(ENTER)  # "Confirm and apply changes"
@@ -88,7 +91,7 @@ class TestCostFieldEditRecalculatesPricing:
             child.sendline("no")
 
             text = expect_clean(child, "Apply these changes\\?")
-            assert "PROPOSED CHANGES" in text
+            assert "EDIT SUMMARY" in text
             child.send(ENTER)  # "Confirm and apply changes"
             text = expect_clean(child, "updated successfully")
         finally:
@@ -131,6 +134,8 @@ class TestCancellationPaths:
         try:
             _enter_edit(child, unit["SKU"])
             child.send(ENTER)  # Supplier
+            child.expect("Search suppliers")
+            child.sendline("")  # blank -- show all suppliers
             child.expect("Select supplier:")
             child.send(DOWN)
             child.send(ENTER)

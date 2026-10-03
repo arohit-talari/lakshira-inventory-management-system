@@ -1,5 +1,5 @@
 """
-Tier 2 -- Discount Simulator (Op 4), driven through a real pty.
+Tier 2 -- Simulate a Discount (Op 4), driven through a real pty.
 
 Chosen as the first scripted interactive flow because it's read-only (the
 function's own docstring says so, and this session's audit confirmed it --
@@ -249,6 +249,13 @@ class TestLowMarginWarning:
     LOW MARGIN alert in the UNIT SUMMARY screen itself."""
 
     def test_low_margin_unit_shows_warning(self, low_margin_unit):
+        # The fixture only searches for margin < 15%, not hero/supplemental
+        # tier, so whichever threshold actually applies depends on which
+        # unit it happens to find (e.g. a "Gadwal" weave type is hero-tier
+        # at 25%, even though it cleared the fixture's 15% search filter).
+        weave_type = low_margin_unit["Weave Type / Cluster"]
+        expected_threshold = "25" if inv._is_hero_weave(weave_type) else "15"
+
         child = spawn_app()
         try:
             _enter_discount_simulator(child)
@@ -256,7 +263,7 @@ class TestLowMarginWarning:
             child.sendline(low_margin_unit["SKU"])
             text = expect_clean(child, "Discount to simulate:")
             assert "LOW MARGIN" in text
-            assert "below the 15% threshold" in text
+            assert f"below the {expected_threshold}% threshold" in text
         finally:
             close(child)
 
@@ -347,13 +354,15 @@ class TestMode2CustomFigures:
             child.sendline("01-15-2026")
             child.expect("Confirm this rate\\?")
             child.sendline("yes")
+            child.expect("hero/exclusive category")
+            child.sendline("no")
 
             text = expect_clean(child, "How would you like to set the selling price\\?")
             assert "COST BASIS" in text
             assert "$25,000" in text or "25,000" in text  # INR total cost display
 
             child.send(ENTER)  # "Enter a markup percentage"
-            child.expect("Markup percentage:")
+            child.expect("Markup Percentage:")
             child.sendline("50")
 
             text = expect_clean(child, "Discount to simulate:")
@@ -389,6 +398,8 @@ class TestMode2CustomFigures:
             child.sendline("01-15-2026")
             child.expect("Confirm this rate\\?")
             child.sendline("yes")
+            child.expect("hero/exclusive category")
+            child.sendline("no")
 
             child.expect("How would you like to set the selling price\\?")
             child.send(DOWN)  # "Enter a selling price (USD)"

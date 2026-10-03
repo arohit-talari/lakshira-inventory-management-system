@@ -90,7 +90,7 @@ def _drive_to_pricing_preview(child, markup_pct="60"):
     you like to proceed' guided menu -> accept the default (proceed)."""
     child.expect("How would you like to set the selling price\\?")
     child.send(ENTER)  # "Enter a markup percentage"
-    child.expect("Markup percentage")
+    child.expect("Markup Percentage")
     child.sendline(markup_pct)
     child.expect("How would you like to proceed\\?")
     child.send(ENTER)  # "Proceed with this price"
@@ -115,6 +115,8 @@ class TestSingleUnitHappyPath:
 
             child.expect("Source Sheet")
             child.sendline("Sheet1 - PytestTab")
+            child.expect("Search suppliers")
+            child.sendline("")  # blank -- show all suppliers
             child.expect("Select supplier:")
             child.send(ENTER)  # first supplier in the list
             child.expect("Date Acquired")
@@ -134,7 +136,7 @@ class TestSingleUnitHappyPath:
             child.sendline("pytest fixture -- safe to ignore")
 
             text = expect_clean(child, "Write this to the master sheet\\?")
-            assert "ADD SUMMARY" in text
+            assert "UNIT INTAKE SUMMARY" in text
             assert sku in text
             assert "Status:               Available" in text
 
@@ -167,6 +169,8 @@ class TestSingleUnitCancellationPaths:
             child.sendline("yes")
             child.expect("Source Sheet")
             child.sendline("Sheet1 - PytestTab")
+            child.expect("Search suppliers")
+            child.sendline("")  # blank -- show all suppliers
             child.expect("Select supplier:")
             child.send(ENTER)
             child.expect("Date Acquired")
@@ -200,6 +204,8 @@ class TestSingleUnitCancellationPaths:
             child.sendline("yes")
             child.expect("Source Sheet")
             child.sendline("Sheet1 - PytestTab")
+            child.expect("Search suppliers")
+            child.sendline("")  # blank -- show all suppliers
             child.expect("Select supplier:")
             child.send(ENTER)
             child.expect("Date Acquired")
@@ -253,6 +259,8 @@ class TestSingleUnitValidation:
             child.sendline("yes")
             child.expect("Source Sheet")
             child.sendline("Sheet1 - PytestTab")
+            child.expect("Search suppliers")
+            child.sendline("")  # blank -- show all suppliers
             child.expect("Select supplier:")
             child.send(ENTER)
             child.expect("Date Acquired")
@@ -275,6 +283,8 @@ class TestSingleUnitValidation:
             child.sendline("yes")
             child.expect("Source Sheet")
             child.sendline("Sheet1 - PytestTab")
+            child.expect("Search suppliers")
+            child.sendline("")  # blank -- show all suppliers
             child.expect("Select supplier:")
             child.send(ENTER)
             child.expect("Date Acquired")
@@ -301,18 +311,19 @@ class TestUnassignedRowReuse:
                 child, garment_type,
                 unassigned_unit["Weave Type / Cluster"], unassigned_unit["Weave Type / Cluster"],
             )
-            text = expect_clean(child, "Would you like to assign this unit to one of these SKUs\\?")
+            child.expect("Select one, or generate a new SKU:")
+            text = expect_clean(child, unassigned_unit["SKU"])
             assert unassigned_unit["SKU"] in text
         finally:
             close(child)
 
 
 class TestBulkAddSameWeaveType:
-    """Pins this session's fix directly: two units of the same weave type
-    in one uncommitted batch must both get real, sequential, distinct SKUs
-    at write time -- and the warning shown for the second one must say it
-    was claimed earlier in *this batch*, not misattribute it to another
-    session (nothing else was running)."""
+    """Two units of the same weave type in one uncommitted batch must get
+    real, sequential, distinct SKUs. batch_reserved_skus excludes SKUs
+    already claimed earlier in the same batch, so the second unit's proposed
+    SKU is already distinct at resolve_sku() time -- there's no same-batch
+    collision left for the write step to resolve."""
 
     def test_two_units_same_weave_type_get_distinct_sequential_skus(self):
         child = spawn_app(timeout=45)
@@ -324,6 +335,8 @@ class TestBulkAddSameWeaveType:
             # Batch-common fields (asked once)
             child.expect("Source Sheet")
             child.sendline("Sheet1 - PytestBulkTab")
+            child.expect("Search suppliers")
+            child.sendline("")  # blank -- show all suppliers
             child.expect("Select supplier:")
             child.send(ENTER)
             child.expect("Date Acquired")
@@ -353,23 +366,17 @@ class TestBulkAddSameWeaveType:
                 child.expect("Add this unit to the batch\\?")
                 child.sendline("yes")
 
-            # Both units collected in memory with the SAME "next" SKU
-            # (generate_next_sku has no visibility into the other
-            # uncommitted unit) -- this is the scenario the fix targets.
-            assert skus[0] == skus[1], (
-                "Test setup assumption broken: expected both in-memory units "
-                "to collide on the same proposed SKU before the write loop "
-                "runs -- if this fails, the pre-write collision this test "
-                "exists to verify simply won't occur."
-            )
+            # batch_reserved_skus excludes SKUs already claimed earlier in
+            # this same uncommitted batch, so the two proposed SKUs are
+            # already distinct and sequential here, at resolve_sku() time --
+            # not just once the batch is actually written.
+            assert skus[0] != skus[1], f"Expected distinct proposed SKUs, got: {skus}"
 
             text = expect_clean(child, "Write all 2 units to the master sheet\\?")
             assert "BULK INTAKE SUMMARY" in text
             child.sendline("yes")
 
-            text = expect_clean(child, "added successfully")
-            assert "already used earlier in this batch" in text
-            assert "claimed by another session" not in text
+            expect_clean(child, "added successfully")
         finally:
             close(child)
 
@@ -393,6 +400,8 @@ class TestBulkAddSkipAndCancel:
             child.sendline("2")
             child.expect("Source Sheet")
             child.sendline("Sheet1 - PytestBulkTab")
+            child.expect("Search suppliers")
+            child.sendline("")  # blank -- show all suppliers
             child.expect("Select supplier:")
             child.send(ENTER)
             child.expect("Date Acquired")

@@ -364,7 +364,7 @@ def create_sold_unit_blank_total_cost(label, customer_name="Pytest Blank Cost Cu
 def create_partial_payment_unit(label, customer_name="Pytest Outstanding Customer",
                                  amount_received=100.0, amount_outstanding=114.18, phone=None):
     """A Sold - Partial Payment unit with real customer/payment data --
-    Record Outstanding Payment and Cancel a Sale both need Customer Name,
+    Record an Outstanding Payment and Cancel a Sale both need Customer Name,
     Date Sold, and populated Amount Received/Outstanding, none of which
     create_fresh_available_unit() sets (it's meant for units still awaiting
     a sale, not ones with a transaction already on them)."""

@@ -1,8 +1,8 @@
 """
-Tier 2 -- Customer Insights (Op 9), driven through a real pty.
+Tier 2 -- View Customer Insights (Op 9), driven through a real pty.
 
 Read-only: no test in this file writes to the master sheet. All fixtures
-here create the sale history first, then Customer Insights just reads it
+here create the sale history first, then View Customer Insights just reads it
 back -- so unlike every operation tested so far, there are no
 "declining leaves data unchanged" cases, since nothing here is ever
 written in the first place.
@@ -29,7 +29,7 @@ def _check_mode():
 
 def _enter_insights(child, search_query):
     child.sendline("9")
-    child.expect("Customer search")
+    child.expect("Customer Search")
     child.sendline(search_query)
 
 
@@ -135,9 +135,9 @@ class TestPeriodScoped:
             child.send(DOWN)
             child.send(DOWN)
             child.send(ENTER)  # Custom
-            child.expect("Start date")
+            child.expect("Start Date")
             child.sendline("01-02-2022")
-            child.expect("End date")
+            child.expect("End Date")
             child.sendline("01-03-2022")
             text = expect_clean(child, "View a different period\\?")
             assert f"No purchases by {name} in" in text
@@ -160,9 +160,9 @@ class TestPeriodScoped:
             child.send(DOWN)
             child.send(DOWN)
             child.send(ENTER)  # Custom
-            child.expect("Start date")
+            child.expect("Start Date")
             child.sendline("01-01-2026")
-            child.expect("End date")
+            child.expect("End Date")
             child.sendline(TODAY_STR)
             text = expect_clean(child, "View a different period\\?")
             # Scoped view -- "Total Spend:", not the lifetime-only "Lifetime Spend:"
@@ -186,6 +186,6 @@ class TestLookUpAnotherCustomerLoop:
             child.sendline("no")
             child.expect("Look up another customer\\?")
             child.sendline("yes")
-            expect_clean(child, "Customer search")
+            expect_clean(child, "Customer Search")
         finally:
             close(child)

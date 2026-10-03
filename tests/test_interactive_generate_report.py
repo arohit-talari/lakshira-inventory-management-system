@@ -39,9 +39,9 @@ def _enter_custom_range(child, start_str, end_str):
     child.send(DOWN)
     child.send(DOWN)
     child.send(ENTER)  # Custom
-    child.expect("Start date")
+    child.expect("Start Date")
     child.sendline(start_str)
-    child.expect("End date")
+    child.expect("End Date")
     child.sendline(end_str)
 
 
@@ -57,7 +57,7 @@ class TestHappyPath:
             child.sendline("no")
             # Success falls straight back into the main menu loop -- no
             # "Returning to Main Menu" line, unlike the exception path.
-            text = expect_clean(child, "Select an option \\(1-11\\)", timeout=90)
+            text = expect_clean(child, "Select an option \\(1-\\d+\\)", timeout=90)
             assert "Report complete" in text
             assert ".pdf" in text
         finally:
@@ -77,7 +77,7 @@ class TestNoDataPeriod:
             _enter_custom_range(child, "01-02-2022", "01-03-2022")
             child.expect("Email report when complete\\?", timeout=20)
             child.sendline("no")
-            text = expect_clean(child, "Select an option \\(1-11\\)", timeout=90)
+            text = expect_clean(child, "Select an option \\(1-\\d+\\)", timeout=90)
             assert "Report complete" in text
         finally:
             close(child)
@@ -94,6 +94,6 @@ class TestBackNavigation:
             child.send(DOWN)
             child.send(DOWN)
             child.send(ENTER)  # Return to Main Menu
-            expect_clean(child, "Select an option \\(1-11\\)")
+            expect_clean(child, "Select an option \\(1-\\d+\\)")
         finally:
             close(child)
