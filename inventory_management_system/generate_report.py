@@ -355,14 +355,34 @@ def _mysql_occasion_split(start=None, end=None):
                                  "revenue": float(revenue) if revenue is not None else 0.0}
     return split
 
+def _mysql_reachable():
+    """Quick, query-free connectivity check. Several functions below return
+    the same empty/None/zero value for two very different situations: a
+    genuine connection or query failure, and a query that connected fine but
+    legitimately found zero matching rows (e.g. AVG() over a period with no
+    transactions). Those two cases shouldn't both be reported to the
+    operator as "could not reach the MySQL warehouse" -- this exists so the
+    one or two call sites that print that warning can check which case
+    they're actually in first, without changing what the other functions
+    return (several of them are called from places that don't distinguish
+    the two cases and would break if the return contract changed)."""
+    try:
+        conn = mysql.connector.connect(**DB_CONFIG, connection_timeout=5)
+        conn.close()
+        return True
+    except Exception:
+        return False
+
 def _mysql_period_occasion_aov(start, end):
     """True average order value for a report period: groups units into real
     purchase occasions (same customer, same day, same sales channel) before
     averaging, same fix as the Tableau dashboard's AOV KPI. A bulk purchase
     of several units in one visit is one order, not several -- averaging
     per unit sold (the old approach) understated typical order size.
-    Returns None on any connection failure, in which case the caller falls
-    back to the simpler per-unit calculation."""
+    Returns None only on a genuine connection/query failure -- a period
+    with zero real transactions returns 0.0 (a successful, accurate
+    result), not None, so the caller doesn't mistake "no sales this period"
+    for "couldn't reach the warehouse"."""
     try:
         conn = mysql.connector.connect(**DB_CONFIG)
         cur = conn.cursor()
@@ -377,7 +397,7 @@ def _mysql_period_occasion_aov(start, end):
         result = cur.fetchone()[0]
         cur.close()
         conn.close()
-        return float(result) if result is not None else None
+        return float(result) if result is not None else 0.0
     except Exception:
         return None
 
@@ -615,8 +635,8 @@ def _metrics(data, start, end, ps, pe, period_type):
     if _occasion_aov is not None:
         avg_price = _occasion_aov
     else:
-        print("Warning: could not reach the MySQL warehouse -- Avg Order Value is "
-              "using the per-unit fallback instead of real purchase occasions.")
+        print("\n\033[33m⚠  Could not reach the MySQL warehouse -- Avg Order Value is "
+              "using the per-unit fallback instead of real purchase occasions.\033[0m\n")
         avg_price = rev / units if units else 0
     pay_methods = defaultdict(lambda: {"count":0, "revenue":0.0})
     for r in sales:
@@ -656,6 +676,16 @@ def _metrics(data, start, end, ps, pe, period_type):
                 if r.get("Status","").strip() in ("Sold","Sold - Partial Payment")]
     cust_life = defaultdict(lambda: {"units":0,"spend":0.0,"cats":defaultdict(int),"name":"",
                                       "outstanding":0.0,"last_purchase":None,"dates":set()})
+
+    # Sold units with no parseable Date Sold -- correctly counted in
+    # all_sold/lifetime totals above (those only check Status), but
+    # invisible to every period-scoped table, including this one, since
+    # _load()'s period_sales/prior_sales both require a real date to
+    # attribute a sale to any period at all. There's no way to know which
+    # period an orphaned sale like this would actually belong to, so this
+    # is reported as a standing, period-independent count, not folded into
+    # "this period's" figures.
+    orphaned_sold_units = sum(1 for r in all_sold if _parse_date(r.get("Date Sold", "")) is None)
 
     # Sales Consistency (Swing): mirrors the dashboard's own "Swing" field
     # (best month minus worst month, relative to a typical month, over a
@@ -756,11 +786,20 @@ def _metrics(data, start, end, ps, pe, period_type):
     # returns, so it's a degraded fallback, not the primary calculation.
     total_named_customers = len(cust_life)
     mysql_occasions = _mysql_occasion_counts()
+    # Computed once here, not re-checked later at render time -- it's the
+    # same underlying connection either way, so this is reused below for
+    # the period-scoped customer table's own disclosure too, instead of a
+    # second live connection attempt just to check the same thing again.
+    warehouse_unreachable = (not mysql_occasions) and (not _mysql_reachable())
     if mysql_occasions:
         loyal_customers = sum(1 for key in cust_life if mysql_occasions.get(key, 0) >= 2)
     else:
-        print("Warning: could not reach the MySQL warehouse -- Lifetime Loyalty is "
-              "using the same-day-purchase proxy instead of real purchase occasions.")
+        # mysql_occasions is also empty when the warehouse connected fine
+        # but legitimately found no grouped occasions -- only warn if it's
+        # actually unreachable, not for that case.
+        if warehouse_unreachable:
+            print("\n\033[33m⚠  Could not reach the MySQL warehouse -- Lifetime Loyalty is "
+                  "using the same-day-purchase proxy instead of real purchase occasions.\033[0m\n")
         loyal_customers = sum(1 for d in cust_life.values() if len(d["dates"]) >= 2)
     lifetime_loyalty = (loyal_customers / total_named_customers * 100
                          if total_named_customers else 0)
@@ -1002,6 +1041,8 @@ def _metrics(data, start, end, ps, pe, period_type):
         swing_window_months=swing_window_months,
         swing_current_rel=swing_current_rel, swing_prior_rel=swing_prior_rel,
         swing_change=swing_change,
+        orphaned_sold_units=orphaned_sold_units,
+        warehouse_unreachable=warehouse_unreachable,
     )
 
 # ── PDF building helpers ───────────────────────────────────────────────────────
@@ -1741,7 +1782,7 @@ NEXT STEP: [One short clause/fragment. The concrete first action to take.]
 IMPACT: [One short clause/fragment. The expected business outcome. Wrap the key metric in double angle brackets if there is one.]]"""
 
         resp = client.messages.create(
-            model="claude-opus-5", max_tokens=8192,
+            model="claude-opus-5", max_tokens=18000,
             messages=[{"role":"user","content":prompt}]
         )
         if resp.stop_reason == "max_tokens":
@@ -1821,7 +1862,13 @@ def _sec_exec(claude_text):
 
     # Header + summary paragraph kept together so the section title is never orphaned
     if sm:
-        raw = _md_to_rl(sm.group(1).strip())   # <<metric>> and **bold** markers become <b> tags
+        # Strip a trailing markdown heading marker (e.g. "## ") left behind
+        # when Claude formats the RECOMMENDATIONS break as its own heading --
+        # the regex boundary above only recognizes the literal text
+        # "RECOMMENDATIONS:", so "##" immediately before it stays captured
+        # as part of the summary instead of being part of the section break.
+        summary_text = re.sub(r'[#\s]+$', '', sm.group(1).strip())
+        raw = _md_to_rl(summary_text)   # <<metric>> and **bold** markers become <b> tags
         story = [KeepTogether(header + [_safe_paragraph(raw, ST["exec_body"])]), Spacer(1, 10)]
     else:
         story = header
@@ -1901,6 +1948,19 @@ def _sec_revenue(m):
                        [CONTENT_W*0.65, CONTENT_W*0.35],
                        key_rows={2, 4}, bold_rows={5}))
     story.append(Spacer(1, 8))
+
+    orphaned = m.get("orphaned_sold_units", 0)
+    if orphaned:
+        story.append(Paragraph(
+            f"<b>{orphaned}</b> Sold unit{'s' if orphaned != 1 else ''} across the business "
+            f"{'have' if orphaned != 1 else 'has'} no Date Sold on record and can't be placed "
+            f"into any period, so {'they' if orphaned != 1 else 'it'} won't appear in the "
+            f"figures above regardless of which period this report covers. Correctly included "
+            f"in lifetime totals elsewhere in this report, not lost or miscounted, just not yet "
+            f"attributable to a specific period.",
+            ST["note"]
+        ))
+        story.append(Spacer(1, 8))
 
     tax = [
         ["Total Revenue",    _usd(rv)],
@@ -2252,12 +2312,21 @@ def _sec_customers(m):
             occasions = m["period_customer_occasions"].get(n, d["units"])
             aov = _usd(d["spend"]/occasions) if occasions else "—"
             rows.append([d["name"], typ, str(d["units"]), _usd(d["spend"]), aov])
+        occasions_note = None
+        if m["warehouse_unreachable"]:
+            occasions_note = Paragraph(
+                "Avg Order Value above uses a less precise per-unit estimate instead of "
+                "real purchase occasions for every customer in this table, because the "
+                "MySQL warehouse couldn't be reached when this report generated.",
+                ST["note"]
+            )
         story = _sec_table(
             heading,
             ["Customer","Type","Units","Spend","Avg Order Value"],
             rows,
             [CONTENT_W*.3, CONTENT_W*.18, CONTENT_W*.12, CONTENT_W*.18, CONTENT_W*.22],
-            right_from=2, center_cols={2, 3, 4}
+            right_from=2, center_cols={2, 3, 4},
+            trailing=[occasions_note] if occasions_note else None
         )
     else:
         story = [KeepTogether(heading + [_no_data()])]
@@ -3166,16 +3235,16 @@ def generate_report(period_type: str, start: date, end: date,
 
     ps, pe = _prior(period_type, start, end)
 
-    print("\n\033[2m  Fetching data...\033[0m")
+    print("\n\033[2mFetching data...\033[0m")
     data = _load(start, end, ps, pe, mode)
 
-    print("\033[2m  Computing metrics...\033[0m")
+    print("\033[2mComputing metrics...\033[0m")
     metrics = _metrics(data, start, end, ps, pe, period_type)
 
-    print("\033[2m  Generating executive summary...\033[0m")
+    print("\033[2mGenerating executive summary...\033[0m")
     claude_text = _claude_summary(metrics, period_label, type_label)
 
-    print("\033[2m  Building PDF...\033[0m")
+    print("\033[2mBuilding PDF...\033[0m")
     _build_pdf(pdf_path, period_label, type_label, period_type,
                ps, pe, metrics, claude_text, gen_date_str)
 
