@@ -1,5 +1,5 @@
 """
-Tier 2 -- Record Outstanding Payment (Op 7), driven through a real pty.
+Tier 2 -- Record an Outstanding Payment (Op 7), driven through a real pty.
 
 Directly exercises this session's highest-severity finding: six raw
 float(x or 0) call sites that crash on any comma-formatted balance >=
@@ -18,7 +18,7 @@ import pytest
 
 import inventory as inv
 from tests import fixtures_data as fd
-from tests.pexpect_helpers import DOWN, ENTER, close, expect_clean, require_test_mode, spawn_app
+from tests.pexpect_helpers import DOWN, ENTER, SPACE, close, expect_clean, require_test_mode, spawn_app
 
 pytestmark = pytest.mark.flaky(reruns=2, reruns_delay=5)
 
@@ -45,9 +45,9 @@ class TestPartialPayment:
         child = spawn_app()
         try:
             _enter_by_sku(child, unit["SKU"])
-            child.expect("Payment date")
+            child.expect("Payment Date")
             child.sendline(TODAY_STR)
-            child.expect("Payment received")
+            child.expect("Payment Received")
             child.sendline("50")
             child.expect("Method of Payment:")
             child.send(ENTER)
@@ -73,9 +73,9 @@ class TestPartialPayment:
         child = spawn_app()
         try:
             _enter_by_sku(child, unit["SKU"])
-            child.expect("Payment date")
+            child.expect("Payment Date")
             child.sendline(TODAY_STR)
-            child.expect("Payment received")
+            child.expect("Payment Received")
             child.sendline("114.18")
             child.expect("Method of Payment:")
             child.send(ENTER)
@@ -103,11 +103,11 @@ class TestPartialPayment:
         child = spawn_app()
         try:
             _enter_by_sku(child, unit["SKU"])
-            child.expect("Payment date")
+            child.expect("Payment Date")
             child.sendline(TODAY_STR)
-            child.expect("Payment received")
+            child.expect("Payment Received")
             child.sendline("200")
-            text = expect_clean(child, "Payment received")  # re-prompted
+            text = expect_clean(child, "Payment Received")  # re-prompted
             assert "exceeds the outstanding balance" in text
         finally:
             close(child)
@@ -132,7 +132,7 @@ class TestFourFigureBalanceDoesNotCrash:
             child.send(ENTER)
             child.expect("Search SKU")
             child.sendline(unit["SKU"])
-            text = expect_clean(child, "Payment date")
+            text = expect_clean(child, "Payment Date")
             assert "$1,250.75" in text
         finally:
             close(child)
@@ -145,9 +145,9 @@ class TestCancellation:
         child = spawn_app()
         try:
             _enter_by_sku(child, unit["SKU"])
-            child.expect("Payment date")
+            child.expect("Payment Date")
             child.sendline(TODAY_STR)
-            child.expect("Payment received")
+            child.expect("Payment Received")
             child.sendline("50")
             child.expect("Method of Payment:")
             child.send(ENTER)
@@ -172,7 +172,7 @@ class TestFilterByCustomer:
         # the fixture's own uniqueness fix) show up as separate customers
         # who all happen to share this literal name. Two-plus matches
         # makes the app show a "Select a customer:" picker instead of
-        # jumping straight to "Payment date" -- this test only handles a
+        # jumping straight to "Payment Date" -- this test only handles a
         # single, unambiguous match, so the name needs real per-run
         # uniqueness the same way phone numbers already have it.
         customer_name = f"Pytest Filterable Customer {int(time.time())}"
@@ -186,9 +186,185 @@ class TestFilterByCustomer:
             child.expect("How would you like to select a unit\\?")
             child.send(DOWN)
             child.send(ENTER)  # "Filter by customer"
-            child.expect("Customer search")
+            child.expect("Customer Search")
             child.sendline(customer_name)
-            text = expect_clean(child, "Payment date")
+            text = expect_clean(child, "Payment Date")
             assert unit["SKU"] in text
         finally:
             close(child)
+
+
+def _enter_bulk_by_customer(child, customer_name, count):
+    """Navigates to Op 7, filters by customer, and checks the first `count`
+    units in the resulting checkbox list (space to toggle, arrow down to
+    move, enter to confirm) -- see docs/Bulk_Payment_Scoping_Op6_Op7.md §8.1."""
+    child.sendline("7")
+    child.expect("How would you like to select a unit\\?")
+    child.send(DOWN)
+    child.send(ENTER)  # "Filter by customer"
+    child.expect("Customer Search")
+    child.sendline(customer_name)
+    expect_clean(child, f"Outstanding units for {customer_name}")
+    for i in range(count):
+        child.send(SPACE)
+        if i < count - 1:
+            child.send(DOWN)
+    child.send(ENTER)
+
+
+class TestBulkPayment:
+    def test_two_units_proportional_split_not_even(self):
+        # Mirrors Op 6's identical allocation flaw scenario: a payment that
+        # covers less than the full batch must give each unit a share
+        # matching its own outstanding balance's ratio, not an equal split.
+        customer_name = f"Pytest Bulk Payer {int(time.time())}"
+        phone = fd._unique_customer_phone()
+        unit_cheap = fd.create_partial_payment_unit(
+            "OUT-BULK-CHEAP", customer_name=customer_name, phone=phone,
+            amount_received=50.0, amount_outstanding=100.0,
+        )
+        unit_pricey = fd.create_partial_payment_unit(
+            "OUT-BULK-PRICEY", customer_name=customer_name, phone=phone,
+            amount_received=50.0, amount_outstanding=300.0,
+        )
+        payment = 200.0  # 50% of the combined $400 outstanding
+
+        child = spawn_app(timeout=45)
+        try:
+            _enter_bulk_by_customer(child, customer_name, 2)
+            expect_clean(child, "UNITS SELECTED \\(2\\)")
+            child.expect("Payment Date")
+            child.sendline(TODAY_STR)
+            child.expect("Total Payment Received")
+            child.sendline(str(payment))
+            child.expect("Method of Payment:")
+            child.send(ENTER)
+
+            text = expect_clean(child, "Write this payment \\(2 units\\) to the master sheet\\?")
+            assert "BULK PAYMENT SUMMARY" in text
+            assert "Sold - Partial Payment" in text
+            child.sendline("yes")
+            expect_clean(child, "recorded across 2")
+        finally:
+            close(child)
+
+        row_cheap = inv.get_row_by_sheet_index(inv.find_row_index_by_sku(unit_cheap["SKU"]))
+        row_pricey = inv.get_row_by_sheet_index(inv.find_row_index_by_sku(unit_pricey["SKU"]))
+        # 50% of the total paid -> each unit carries exactly 50% of its own
+        # original outstanding balance afterward, not an equal dollar split.
+        assert inv._sheet_float(row_cheap["Amount Outstanding (USD)"]) == 50.0
+        assert inv._sheet_float(row_pricey["Amount Outstanding (USD)"]) == 150.0
+        assert row_cheap["Status"] == "Sold - Partial Payment"
+        assert row_pricey["Status"] == "Sold - Partial Payment"
+
+    def test_full_payoff_clears_every_unit(self):
+        customer_name = f"Pytest Bulk Full Payer {int(time.time())}"
+        phone = fd._unique_customer_phone()
+        unit_a = fd.create_partial_payment_unit(
+            "OUT-BULK-FULL-A", customer_name=customer_name, phone=phone,
+            amount_received=50.0, amount_outstanding=75.0,
+        )
+        unit_b = fd.create_partial_payment_unit(
+            "OUT-BULK-FULL-B", customer_name=customer_name, phone=phone,
+            amount_received=50.0, amount_outstanding=125.0,
+        )
+
+        child = spawn_app(timeout=45)
+        try:
+            _enter_bulk_by_customer(child, customer_name, 2)
+            child.expect("Payment Date")
+            child.sendline(TODAY_STR)
+            child.expect("Total Payment Received")
+            child.sendline("200")  # exactly the combined $200 outstanding
+            child.expect("Method of Payment:")
+            child.send(ENTER)
+
+            text = expect_clean(child, "Write this payment \\(2 units\\) to the master sheet\\?")
+            assert "Sold - Partial Payment" not in text
+            child.sendline("yes")
+            expect_clean(child, "recorded across 2")
+        finally:
+            close(child)
+
+        row_a = inv.get_row_by_sheet_index(inv.find_row_index_by_sku(unit_a["SKU"]))
+        row_b = inv.get_row_by_sheet_index(inv.find_row_index_by_sku(unit_b["SKU"]))
+        assert row_a["Status"] == "Sold" and row_b["Status"] == "Sold"
+        assert row_a["Amount Outstanding (USD)"] == ""
+        assert row_b["Amount Outstanding (USD)"] == ""
+
+
+class TestOutstandingConflictResolution:
+    """Covers _resolve_outstanding_conflict() (docs/Bulk_Payment_Scoping_Op6_Op7.md
+    §5) -- a concurrent sheet change is simulated with a direct update_row()
+    call from the test itself, timed between answering the first
+    confirmation and the app's own fresh re-read, the same way a second
+    real session's write would land in that same window."""
+
+    def test_use_current_value_recomputes_and_rewrites_summary(self):
+        unit = fd.create_partial_payment_unit("OUT-CONFLICT-USE-CURRENT", amount_received=100.0,
+                                               amount_outstanding=114.18)
+        child = spawn_app(timeout=45)
+        try:
+            _enter_by_sku(child, unit["SKU"])
+            child.expect("Payment Date")
+            child.sendline(TODAY_STR)
+            child.expect("Payment Received")
+            child.sendline("50")
+            child.expect("Method of Payment:")
+            child.send(ENTER)
+            child.expect("Confirm and write to sheet\\?")
+
+            # Simulate another session's payment landing in the gap between
+            # this confirmation and the write-time re-check.
+            inv.update_row(inv.find_row_index_by_sku(unit["SKU"]), {
+                "Amount Received (USD)": 150.0, "Amount Outstanding (USD)": 64.18,
+            })
+            child.sendline("yes")
+
+            text = expect_clean(child, "Which is correct\\?")
+            assert "114.18" in text and "64.18" in text
+            child.send(ENTER)  # "Use the current sheet value ($64.18) and continue"
+
+            text = expect_clean(child, "Confirm and write to sheet\\?")
+            assert "$14.18" in text  # 64.18 - 50, recomputed against the fresh balance
+            child.sendline("yes")
+            expect_clean(child, "still outstanding")
+        finally:
+            close(child)
+
+        updated = inv.get_row_by_sheet_index(inv.find_row_index_by_sku(unit["SKU"]))
+        assert inv._sheet_float(updated["Amount Received (USD)"]) == 200.0  # 150 (fresh) + 50
+        assert inv._sheet_float(updated["Amount Outstanding (USD)"]) == 14.18
+
+    def test_restore_value_overwrites_the_sheet(self):
+        unit = fd.create_partial_payment_unit("OUT-CONFLICT-RESTORE", amount_received=100.0,
+                                               amount_outstanding=114.18)
+        child = spawn_app(timeout=45)
+        try:
+            _enter_by_sku(child, unit["SKU"])
+            child.expect("Payment Date")
+            child.sendline(TODAY_STR)
+            child.expect("Payment Received")
+            child.sendline("50")
+            child.expect("Method of Payment:")
+            child.send(ENTER)
+            child.expect("Confirm and write to sheet\\?")
+
+            # Simulate a hand-edit/typo on the sheet, not a real payment.
+            inv.update_row(inv.find_row_index_by_sku(unit["SKU"]), {
+                "Amount Outstanding (USD)": 999.99,
+            })
+            child.sendline("yes")
+
+            child.expect("Which is correct\\?")
+            child.send(DOWN)
+            child.send(ENTER)  # "The sheet is wrong — restore it to $114.18 and continue"
+            expect_clean(child, "still outstanding")
+        finally:
+            close(child)
+
+        updated = inv.get_row_by_sheet_index(inv.find_row_index_by_sku(unit["SKU"]))
+        # Restored to the original trajectory (100 + 50 received, 114.18 - 50
+        # outstanding), not left at the bad 999.99 value.
+        assert inv._sheet_float(updated["Amount Received (USD)"]) == 150.0
+        assert inv._sheet_float(updated["Amount Outstanding (USD)"]) == 64.18

@@ -24,6 +24,7 @@ import inventory as inv
 DOWN = "\x1b[B"
 UP = "\x1b[A"
 ENTER = "\r"
+SPACE = " "  # toggles the current choice in a questionary.checkbox() prompt
 
 DEFAULT_TIMEOUT = 35  # generous: covers real ECB-rate and Sheets API round-trips,
                        # with headroom for occasional slow responses during a long

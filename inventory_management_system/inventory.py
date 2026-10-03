@@ -6004,9 +6004,42 @@ def discount_simulator():
             return
 
 
+def _resolve_outstanding_conflict(sku, selected_outstanding, fresh_outstanding):
+    """
+    A unit's Amount Outstanding on the sheet no longer matches what this
+    flow started with -- either a genuine concurrent payment landed (the
+    sheet's current value is correct, it reflects a real write that
+    already happened), or the sheet was hand-edited outside the IMS and
+    drifted (what this flow started with was actually right). These call
+    for opposite responses, so this surfaces both numbers and asks which
+    one is true rather than silently picking one or hard-aborting.
+    Returns "use_current", "restore", or None (cancel, write nothing).
+    """
+    _warn(f"{sku}: outstanding balance has changed since you started "
+          f"(was ${selected_outstanding:,.2f}, is now ${fresh_outstanding:,.2f}).")
+    choice = questionary.select(
+        "",
+        choices=[
+            f"Use the current sheet value (${fresh_outstanding:,.2f}) and continue",
+            f"The sheet is wrong — restore it to ${selected_outstanding:,.2f} and continue",
+            questionary.Separator(" "),
+            _back_choice("Cancel, write nothing"),
+        ],
+        qmark="\nWhich is correct?",
+        instruction=" ",
+        style=_MENU_STYLE,
+    ).unsafe_ask()
+    if choice is None or choice == "Cancel, write nothing":
+        return None
+    if choice.startswith("Use the current"):
+        return "use_current"
+    return "restore"
+
+
 def record_outstanding_payment():
     """Record a payment against a Sold - Partial Payment unit."""
     print("\n--- \033[1;38;5;124mRECORD AN OUTSTANDING PAYMENT\033[0m ---")
+    _check_leftover_batch_intent_log()
     while True:  # outer loop: "Record another payment?"
         rows = get_all_rows()
         partial_rows = [r for r in rows if r.get("Status", "").strip() == "Sold - Partial Payment"]
@@ -6078,8 +6111,8 @@ def record_outstanding_payment():
         print(_eq)
 
         # Entry menu
-        selected_row = None
-        while selected_row is None:
+        selected_rows = []
+        while not selected_rows:
             nav = questionary.select(
                 "",
                 choices=["Enter by SKU", "Filter by customer",
@@ -6118,7 +6151,7 @@ def record_outstanding_payment():
                         ).unsafe_ask()
                     if chosen_sku is None or chosen_sku == "Change selection method":
                         break  # back to nav menu
-                    selected_row = next(r for r in all_sorted if r.get("SKU", "").strip() == chosen_sku)
+                    selected_rows = [next(r for r in all_sorted if r.get("SKU", "").strip() == chosen_sku)]
                     break
 
             elif nav == "Filter by customer":
@@ -6199,115 +6232,145 @@ def record_outstanding_payment():
                         r.get("Customer Phone", ""), r.get("Customer Email", ""),
                     ) == selected_customer["key"]
                 ]
-                sku_options = sorted(r.get("SKU", "").strip() for r in customer_units)
-                if len(sku_options) == 1:
-                    chosen_sku = sku_options[0]
+                customer_units = sorted(customer_units, key=lambda r: r.get("SKU", "").strip())
+                if len(customer_units) == 1:
+                    selected_rows = customer_units
                 else:
-                    chosen_sku = questionary.select(
+                    # Checkbox, not a single select -- this is the one lump
+                    # sum payment may apply to several of this customer's
+                    # outstanding units at once (not necessarily all of
+                    # them, she may separately owe on an unrelated
+                    # purchase). Checking just one box behaves exactly like
+                    # the single-unit path above. See
+                    # docs/Bulk_Payment_Scoping_Op6_Op7.md §8.1 -- the
+                    # instruction line is left as questionary's own default
+                    # ("space to select...") rather than suppressed like
+                    # every select() above, since toggling a checkbox is an
+                    # interaction nothing else in this tool has taught yet.
+                    choices = [
+                        questionary.Choice(
+                            title=f"{r.get('SKU', '').strip():<16}${_sheet_float(r.get('Amount Outstanding (USD)')):,.2f} outstanding",
+                            value=r.get("SKU", "").strip(),
+                        )
+                        for r in customer_units
+                    ]
+                    chosen_skus = questionary.checkbox(
                         "",
-                        choices=sku_options + [
-                            questionary.Separator(" "),
-                            _back_choice("Change selection method"),
-                        ],
+                        choices=choices,
                         qmark=f"\nOutstanding units for {selected_customer['name']}:",
-                        instruction=" ",
                         style=_MENU_STYLE,
                     ).unsafe_ask()
-                if chosen_sku is None or chosen_sku == "Change selection method":
-                    continue
-                selected_row = next(r for r in customer_units if r.get("SKU", "").strip() == chosen_sku)
+                    if not chosen_skus:
+                        continue  # confirmed with nothing checked -- back to nav menu
+                    selected_rows = [r for r in customer_units if r.get("SKU", "").strip() in chosen_skus]
 
-        # Step 3 — Payment history summary
-        sku              = selected_row.get("SKU", "").strip()
-        customer_name    = selected_row.get("Customer Name", "").strip()
-        date_sold_str    = selected_row.get("Date Sold", "").strip()
-        selling_price    = _sheet_float(selected_row.get("Selling Price (USD)"))
-        actual_price     = _sheet_float(selected_row.get("Actual Selling Price (USD)"))
-        discount_pct     = _sheet_float(str(selected_row.get("Discount %") or "").replace("%", "").strip())
-        amount_received  = _sheet_float(selected_row.get("Amount Received (USD)"))
-        amount_outstanding = _sheet_float(selected_row.get("Amount Outstanding (USD)"))
-        txn_notes        = selected_row.get("Transaction Notes", "").strip()
-        sales_channel    = selected_row.get("Sales Channel", "").strip()
-        has_discount     = abs(actual_price - selling_price) >= 0.01 and discount_pct > 0
-
-        days = _days_since(_safe_parse_date(date_sold_str), reference_date=today)
-
-        if days is None:
-            days_str = "\033[95munknown\033[0m"
+        # Step 3 onward -- single vs. bulk processing. Checking just one box
+        # above (or using "Enter by SKU") always yields exactly one row
+        # here, so this reduces to the single-unit path with no separate
+        # fork needed for that case.
+        if len(selected_rows) == 1:
+            keep_going = _process_single_outstanding_payment(selected_rows[0])
         else:
-            if days >= 60:
-                days_color = "\033[91m"
-            elif days >= 31:
-                days_color = "\033[93m"
-            else:
-                days_color = "\033[92m"
-            days_str = f"{days_color}{days} days\033[0m"
+            keep_going = _process_bulk_outstanding_payment(selected_rows)
+        if not keep_going:
+            return
+        # continue outer loop with fresh data on next iteration
 
-        _payment_rows = []
-        if has_discount:
-            _payment_rows.append(f"  \033[1m{'Listed Price:':<22}\033[0m${selling_price:,.2f}")
-            _payment_rows.append(f"  \033[1m{'Discount:':<22}\033[0m\033[33m{discount_pct:.1f}%\033[0m")
-            _payment_rows.append(f"  \033[1m{'Selling Price:':<22}\033[0m${actual_price:,.2f}")
+
+def _process_single_outstanding_payment(selected_row):
+    """Steps 3-7 for exactly one unit. Returns True to continue Record an
+    Outstanding Payment's outer 'Record another payment?' loop, False to
+    return to Main Menu."""
+    today = date.today()
+
+    # Step 3 — Payment history summary
+    sku              = selected_row.get("SKU", "").strip()
+    customer_name    = selected_row.get("Customer Name", "").strip()
+    date_sold_str    = selected_row.get("Date Sold", "").strip()
+    selling_price    = _sheet_float(selected_row.get("Selling Price (USD)"))
+    actual_price     = _sheet_float(selected_row.get("Actual Selling Price (USD)"))
+    discount_pct     = _sheet_float(str(selected_row.get("Discount %") or "").replace("%", "").strip())
+    amount_received  = _sheet_float(selected_row.get("Amount Received (USD)"))
+    amount_outstanding = _sheet_float(selected_row.get("Amount Outstanding (USD)"))
+    txn_notes        = selected_row.get("Transaction Notes", "").strip()
+    sales_channel    = selected_row.get("Sales Channel", "").strip()
+    has_discount     = abs(actual_price - selling_price) >= 0.01 and discount_pct > 0
+
+    days = _days_since(_safe_parse_date(date_sold_str), reference_date=today)
+
+    if days is None:
+        days_str = "\033[95munknown\033[0m"
+    else:
+        if days >= 60:
+            days_color = "\033[91m"
+        elif days >= 31:
+            days_color = "\033[93m"
         else:
-            _payment_rows.append(f"  \033[1m{'Selling Price:':<22}\033[0m${selling_price:,.2f}")
-        _payment_rows.append(f"  \033[1m{'Amount Received:':<22}\033[0m\033[92m${amount_received:,.2f}\033[0m")
-        _payment_rows.append(f"  \033[1m{'Amount Outstanding:':<22}\033[0m\033[91m${amount_outstanding:,.2f}\033[0m")
+            days_color = "\033[92m"
+        days_str = f"{days_color}{days} days\033[0m"
 
-        _notes_rows = []
-        if txn_notes:
-            for entry in txn_notes.split("\n"):
-                wrapped = textwrap.fill(entry.strip(), width=46, subsequent_indent="  ")
-                for wline in wrapped.split("\n"):
-                    _notes_rows.append(f"  {wline}")
+    _payment_rows = []
+    if has_discount:
+        _payment_rows.append(f"  \033[1m{'Listed Price:':<22}\033[0m${selling_price:,.2f}")
+        _payment_rows.append(f"  \033[1m{'Discount:':<22}\033[0m\033[33m{discount_pct:.1f}%\033[0m")
+        _payment_rows.append(f"  \033[1m{'Selling Price:':<22}\033[0m${actual_price:,.2f}")
+    else:
+        _payment_rows.append(f"  \033[1m{'Selling Price:':<22}\033[0m${selling_price:,.2f}")
+    _payment_rows.append(f"  \033[1m{'Amount Received:':<22}\033[0m\033[92m${amount_received:,.2f}\033[0m")
+    _payment_rows.append(f"  \033[1m{'Amount Outstanding:':<22}\033[0m\033[91m${amount_outstanding:,.2f}\033[0m")
 
-        _print_boxed("TRANSACTION SUMMARY", [
-            ("TRANSACTION", [
-                f"  \033[1m{'SKU:':<22}\033[0m{sku}",
-                f"  \033[1m{'Customer:':<22}\033[0m{customer_name}",
-                f"  \033[1m{'Sales Channel:':<22}\033[0m{sales_channel}",
-                f"  \033[1m{'Date Sold:':<22}\033[0m{date_sold_str}",
-                f"  \033[1m{'Days Outstanding:':<22}\033[0m{days_str}",
-            ]),
-            ("PAYMENT", _payment_rows),
-            ("NOTES", _notes_rows),
-        ])
+    _notes_rows = []
+    if txn_notes:
+        for entry in txn_notes.split("\n"):
+            wrapped = textwrap.fill(entry.strip(), width=46, subsequent_indent="  ")
+            for wline in wrapped.split("\n"):
+                _notes_rows.append(f"  {wline}")
 
-        # Step 4 — Payment date
-        payment_date_str = ask_date("Payment Date", not_future=True).strftime("%m-%d-%Y")
+    _print_boxed("TRANSACTION SUMMARY", [
+        ("TRANSACTION", [
+            f"  \033[1m{'SKU:':<22}\033[0m{sku}",
+            f"  \033[1m{'Customer:':<22}\033[0m{customer_name}",
+            f"  \033[1m{'Sales Channel:':<22}\033[0m{sales_channel}",
+            f"  \033[1m{'Date Sold:':<22}\033[0m{date_sold_str}",
+            f"  \033[1m{'Days Outstanding:':<22}\033[0m{days_str}",
+        ]),
+        ("PAYMENT", _payment_rows),
+        ("NOTES", _notes_rows),
+    ])
 
-        # Step 4a — Payment entry
-        payment = None
-        while payment is None:
-            payment = ask_number("Payment Received (USD):", allow_zero=False)
-            if payment > round(amount_outstanding, 2):
-                _warn(
-                    f"This amount exceeds the outstanding balance of ${amount_outstanding:,.2f}. "
-                    f"Please enter ${amount_outstanding:,.2f} or less."
-                )
-                payment = None
+    # Step 4 — Payment date
+    payment_date_str = ask_date("Payment Date", not_future=True).strftime("%m-%d-%Y")
 
-        # Step 4b — Payment method
-        payment_method = ask_payment_method()
-
-        # Step 5 — Determine outcome
-        new_received = round(amount_received + payment, 2)
-
-        if round(payment, 2) >= round(amount_outstanding, 2):
-            new_outstanding = 0.0
-            new_status = "Sold"
-            note_append = f"[{payment_date_str} · PAYMENT] Final payment of ${payment:,.2f} received via {payment_method}. Fully settled."
-        else:
-            new_outstanding = round(amount_outstanding - payment, 2)
-            new_status = "Sold - Partial Payment"
-            note_append = (
-                f"[{payment_date_str} · PAYMENT] Partial payment of ${payment:,.2f} received via {payment_method}. "
-                f"${new_outstanding:,.2f} still outstanding."
+    # Step 4a — Payment entry
+    payment = None
+    while payment is None:
+        payment = ask_number("Payment Received (USD):", allow_zero=False)
+        if payment > round(amount_outstanding, 2):
+            _warn(
+                f"This amount exceeds the outstanding balance of ${amount_outstanding:,.2f}. "
+                f"Please enter ${amount_outstanding:,.2f} or less."
             )
+            payment = None
 
-        # Step 6 — Confirmation summary
-        _status_color      = get_status_color(new_status)
-        _outstanding_color = "\033[92m" if new_outstanding == 0 else "\033[91m"
+    # Step 4b — Payment method
+    payment_method = ask_payment_method()
 
+    def _compute_outcome(_received, _outstanding, _payment):
+        _new_received = round(_received + _payment, 2)
+        if round(_payment, 2) >= round(_outstanding, 2):
+            return _new_received, 0.0, "Sold", (
+                f"[{payment_date_str} · PAYMENT] Final payment of ${_payment:,.2f} received via "
+                f"{payment_method}. Fully settled."
+            )
+        _new_outstanding = round(_outstanding - _payment, 2)
+        return _new_received, _new_outstanding, "Sold - Partial Payment", (
+            f"[{payment_date_str} · PAYMENT] Partial payment of ${_payment:,.2f} received via "
+            f"{payment_method}. ${_new_outstanding:,.2f} still outstanding."
+        )
+
+    def _show_payment_summary(_payment, _new_received, _new_outstanding, _new_status, _note_append):
+        _status_color      = get_status_color(_new_status)
+        _outstanding_color = "\033[92m" if _new_outstanding == 0 else "\033[91m"
         _print_boxed("PAYMENT SUMMARY", [
             ("TRANSACTION", [
                 f"  \033[1m{'SKU:':<22}\033[0m{sku}",
@@ -6315,72 +6378,310 @@ def record_outstanding_payment():
                 f"  \033[1m{'Payment Date:':<22}\033[0m{payment_date_str}",
             ]),
             ("PAYMENT", [
-                f"  \033[1m{'Payment Received:':<22}\033[0m\033[92m${payment:,.2f}\033[0m",
+                f"  \033[1m{'Payment Received:':<22}\033[0m\033[92m${_payment:,.2f}\033[0m",
                 f"  \033[1m{'Payment Method:':<22}\033[0m{payment_method}",
-                f"  \033[1m{'Amount Received:':<22}\033[0m\033[92m${new_received:,.2f}\033[0m",
-                f"  \033[1m{'Amount Outstanding:':<22}\033[0m{_outstanding_color}${new_outstanding:,.2f}\033[0m",
-                f"  \033[1m{'Status:':<22}\033[0m{_status_color}{new_status}\033[0m",
+                f"  \033[1m{'Amount Received:':<22}\033[0m\033[92m${_new_received:,.2f}\033[0m",
+                f"  \033[1m{'Amount Outstanding:':<22}\033[0m{_outstanding_color}${_new_outstanding:,.2f}\033[0m",
+                f"  \033[1m{'Status:':<22}\033[0m{_status_color}{_new_status}\033[0m",
             ]),
-            ("NOTES", _notes_section_rows(note_append)),
+            ("NOTES", _notes_section_rows(_note_append)),
         ])
 
-        confirmed = ask_yes_no("Confirm and write to sheet?")
-        if not confirmed:
+    # Step 5 — Determine outcome, Step 6 — Confirmation summary
+    new_received, new_outstanding, new_status, note_append = _compute_outcome(
+        amount_received, amount_outstanding, payment
+    )
+    _show_payment_summary(payment, new_received, new_outstanding, new_status, note_append)
+
+    if not ask_yes_no("Confirm and write to sheet?"):
+        print("\nPayment cancelled. Returning to Main Menu.")
+        return False
+
+    # Step 7 — Write
+    sheet_row = find_row_index_by_sku(sku)
+    if sheet_row is None:
+        print(f"Error: Could not locate {sku} in the sheet. No changes written.")
+        return False
+
+    # Re-check right before writing: the balance/status snapshot was
+    # captured back when this unit was selected, and the operator has
+    # since entered a payment date, amount, and payment method -- long
+    # enough for another session to have recorded a different payment,
+    # or for this sale to have been cancelled, in the meantime. Same
+    # guard already used for record_sale(), reprice_unit(), cancel_sale(),
+    # manage_reservation(), and add_new_inventory()'s Unassigned-reuse
+    # path -- this call site never had it.
+    if not _status_unchanged(sheet_row, "Sold - Partial Payment"):
+        _warn("This unit's status has changed since you started (no longer 'Sold - Partial Payment'). "
+              "Another user may have just updated it — nothing was written. Please re-check the SKU.")
+        return False
+
+    # Numeric-aware, not the generic string-based _row_fields_unchanged --
+    # selected_row came from get_all_rows() (gspread's get_all_records(),
+    # which type-infers numeric cells), so a fresh re-read via
+    # get_row_by_sheet_index() (always plain strings) could otherwise
+    # false-positive on "40" vs "40.0" formatting differences that don't
+    # represent an actual change.
+    #
+    # A mismatch here no longer hard-aborts outright -- see
+    # _resolve_outstanding_conflict() and docs/Bulk_Payment_Scoping_Op6_Op7.md
+    # §5. If the resolved answer is "use the current value," the payment
+    # already entered may now exceed what's actually left owed, so it's
+    # re-collected against the real baseline and the summary is shown again
+    # before writing -- never silently written against stale numbers the
+    # operator never actually saw.
+    while True:
+        _fresh_row = get_row_by_sheet_index(sheet_row)
+        _fresh_outstanding = _sheet_float(_fresh_row.get("Amount Outstanding (USD)"))
+        if round(_fresh_outstanding, 2) == round(amount_outstanding, 2):
+            break  # no conflict -- proceed with what was already confirmed
+
+        resolution = _resolve_outstanding_conflict(sku, amount_outstanding, _fresh_outstanding)
+        if resolution is None:
             print("\nPayment cancelled. Returning to Main Menu.")
-            return
+            return False
+        if resolution == "restore":
+            # The already-confirmed numbers were computed from the original
+            # (correct) baseline -- writing them is itself the restoration,
+            # no recompute needed.
+            break
 
-        # Step 7 — Write
-        sheet_row = find_row_index_by_sku(sku)
-        if sheet_row is None:
-            print(f"Error: Could not locate {sku} in the sheet. No changes written.")
-            return
+        # "use_current" -- recompute against the real, current balance.
+        amount_received = _sheet_float(_fresh_row.get("Amount Received (USD)"))
+        amount_outstanding = _fresh_outstanding
+        if payment > round(amount_outstanding, 2):
+            _warn(f"Your entered payment of ${payment:,.2f} now exceeds the current outstanding "
+                  f"balance of ${amount_outstanding:,.2f}. Please re-enter the payment amount.")
+            payment = None
+            while payment is None:
+                payment = ask_number("Payment Received (USD):", allow_zero=False)
+                if payment > round(amount_outstanding, 2):
+                    _warn(f"This amount exceeds the outstanding balance of ${amount_outstanding:,.2f}. "
+                          f"Please enter ${amount_outstanding:,.2f} or less.")
+                    payment = None
+        new_received, new_outstanding, new_status, note_append = _compute_outcome(
+            amount_received, amount_outstanding, payment
+        )
+        _show_payment_summary(payment, new_received, new_outstanding, new_status, note_append)
+        if not ask_yes_no("Confirm and write to sheet?"):
+            print("\nPayment cancelled. Returning to Main Menu.")
+            return False
+        # loop again -- re-verify against the sheet once more before writing,
+        # in case yet another change landed while this was being resolved
 
-        # Re-check right before writing: the balance/status snapshot was
-        # captured back when this unit was selected, and the operator has
-        # since entered a payment date, amount, and payment method -- long
-        # enough for another session to have recorded a different payment,
-        # or for this sale to have been cancelled, in the meantime. Same
-        # guard already used for record_sale(), reprice_unit(), cancel_sale(),
-        # manage_reservation(), and add_new_inventory()'s Unassigned-reuse
-        # path -- this call site never had it.
-        if not _status_unchanged(sheet_row, "Sold - Partial Payment"):
-            _warn("This unit's status has changed since you started (no longer 'Sold - Partial Payment'). "
-                  "Another user may have just updated it — nothing was written. Please re-check the SKU.")
-            return
+    updated_notes = _fresh_notes_append(sheet_row, "Transaction Notes", [note_append])
 
-        # Numeric-aware, not the generic string-based _row_fields_unchanged --
-        # selected_row came from get_all_rows() (gspread's get_all_records(),
-        # which type-infers numeric cells), so a fresh re-read via
-        # get_row_by_sheet_index() (always plain strings) could otherwise
-        # false-positive on "40" vs "40.0" formatting differences that don't
-        # represent an actual change. This is also the one field in this
-        # flow where "someone else changed it" must hard-abort rather than
-        # merge -- two different payments computed from two different stale
-        # baselines can't be safely combined after the fact.
-        _fresh_outstanding = _sheet_float(get_row_by_sheet_index(sheet_row).get("Amount Outstanding (USD)"))
-        if round(_fresh_outstanding, 2) != round(amount_outstanding, 2):
-            _warn(f"This unit's outstanding balance has changed since you started (was "
-                  f"${amount_outstanding:,.2f}, is now ${_fresh_outstanding:,.2f}) — another user may "
-                  f"have recorded a different payment. Nothing was written. Please re-check the SKU.")
-            return
+    update_row(sheet_row, {
+        "Amount Received (USD)": "" if new_status == "Sold" else new_received,
+        "Amount Outstanding (USD)": "" if new_status == "Sold" else new_outstanding,
+        "Status": new_status,
+        "Transaction Notes": updated_notes,
+    })
 
-        updated_notes = _fresh_notes_append(sheet_row, "Transaction Notes", [note_append])
+    if new_outstanding == 0:
+        print(f"\n\033[38;5;202m✓ {sku} — payment of ${payment:,.2f} recorded. Balance fully settled.\033[0m")
+    else:
+        print(f"\n\033[38;5;202m✓ {sku} — payment of ${payment:,.2f} recorded. ${new_outstanding:,.2f} still outstanding.\033[0m")
 
-        update_row(sheet_row, {
-            "Amount Received (USD)": "" if new_status == "Sold" else new_received,
-            "Amount Outstanding (USD)": "" if new_status == "Sold" else new_outstanding,
-            "Status": new_status,
-            "Transaction Notes": updated_notes,
+    return ask_yes_no("Record another payment?")
+
+
+def _process_bulk_outstanding_payment(selected_rows):
+    """One lump-sum payment across several units (same customer, chosen via
+    the checkbox above). Allocated proportionally to each unit's current
+    Amount Outstanding via _allocate_proportional_payment() -- see
+    docs/Bulk_Payment_Scoping_Op6_Op7.md §2 and §4. Returns True to
+    continue the outer 'Record another payment?' loop, False to return to
+    Main Menu."""
+    units = []
+    for r in selected_rows:
+        sku = r.get("SKU", "").strip()
+        row_index = find_row_index_by_sku(sku)
+        units.append({
+            "sku": sku,
+            "row_index": row_index,
+            "current_status": r.get("Status", "").strip(),
+            "customer_name": r.get("Customer Name", "").strip(),
+            "outstanding": _sheet_float(r.get("Amount Outstanding (USD)")),
+            "received": _sheet_float(r.get("Amount Received (USD)")),
         })
 
-        if new_outstanding == 0:
-            print(f"\n\033[38;5;202m✓ {sku} — payment of ${payment:,.2f} recorded. Balance fully settled.\033[0m")
-        else:
-            print(f"\n\033[38;5;202m✓ {sku} — payment of ${payment:,.2f} recorded. ${new_outstanding:,.2f} still outstanding.\033[0m")
+    customer_name = units[0]["customer_name"]
+    total_outstanding_before = round(sum(u["outstanding"] for u in units), 2)
 
-        if not ask_yes_no("Record another payment?"):
-            return
-        # continue outer loop with fresh data on next iteration
+    _rows = [f"  \033[1m{'SKU':<16}Outstanding\033[0m"]
+    for u in units:
+        _rows.append(f"  {u['sku']:<16}${u['outstanding']:,.2f}")
+    _print_boxed(f"UNITS SELECTED ({len(units)})", [
+        ("UNITS", _rows),
+        ("TOTAL", [f"  \033[1m{'Total Outstanding:':<22}\033[0m${total_outstanding_before:,.2f}"]),
+    ])
+
+    payment_date_str = ask_date("Payment Date", not_future=True).strftime("%m-%d-%Y")
+
+    payment = None
+    while payment is None:
+        payment = ask_number(
+            f"Total Payment Received (USD) (total outstanding is ${total_outstanding_before:,.2f}):",
+            allow_zero=False,
+        )
+        if payment > round(total_outstanding_before, 2):
+            _warn(f"This amount exceeds the total outstanding balance of ${total_outstanding_before:,.2f}. "
+                  f"Please enter ${total_outstanding_before:,.2f} or less.")
+            payment = None
+
+    payment_method = ask_payment_method()
+
+    def _allocate(_units, _payment):
+        shares = _allocate_proportional_payment(_payment, [u["outstanding"] for u in _units])
+        for u, share in zip(_units, shares):
+            u["payment_share"] = share
+            new_outstanding = round(u["outstanding"] - share, 2)
+            if new_outstanding <= 0:
+                u["new_outstanding"] = 0.0
+                u["new_status"] = "Sold"
+            else:
+                u["new_outstanding"] = new_outstanding
+                u["new_status"] = "Sold - Partial Payment"
+            u["new_received"] = round(u["received"] + share, 2)
+
+    def _show_bulk_summary(_units, _payment):
+        _rows = [f"  \033[1m{'SKU':<14}{'Before':<12}{'Payment':<12}{'After':<12}Status\033[0m"]
+        for u in _units:
+            _status_c = get_status_color(u["new_status"])
+            _rows.append(
+                f"  {u['sku']:<14}${u['outstanding']:<11,.2f}${u['payment_share']:<11,.2f}"
+                f"${u['new_outstanding']:<11,.2f}{_status_c}{u['new_status']}\033[0m"
+            )
+        _print_boxed(f"BULK PAYMENT SUMMARY ({len(_units)} units)", [
+            ("UNITS", _rows),
+            ("TRANSACTION", [
+                f"  \033[1m{'Customer:':<22}\033[0m{customer_name}",
+                f"  \033[1m{'Payment Date:':<22}\033[0m{payment_date_str}",
+                f"  \033[1m{'Payment Method:':<22}\033[0m{payment_method}",
+            ]),
+            ("TOTALS", [
+                f"  \033[1m{'Total Payment:':<22}\033[0m${_payment:,.2f}",
+                f"  \033[1m{'Total Outstanding After:':<22}\033[0m"
+                f"${round(sum(u['new_outstanding'] for u in _units), 2):,.2f}",
+            ]),
+        ])
+
+    _allocate(units, payment)
+    _show_bulk_summary(units, payment)
+
+    if not ask_yes_no(f"\nWrite this payment ({len(units)} units) to the master sheet?"):
+        print("\nBulk payment cancelled. Nothing was written. Returning to Main Menu.")
+        return False
+
+    # Pre-write validation -- re-checked as a whole, not unit by unit in
+    # isolation, because the allocation above was computed across every
+    # selected unit together. A status change is a hard fact (that unit
+    # can no longer be part of this payment at all), so it aborts the
+    # whole batch -- there's no "which number is correct" to resolve.
+    # An outstanding-balance mismatch does get the three-way resolution
+    # (docs/Bulk_Payment_Scoping_Op6_Op7.md §5); if any unit resolves to
+    # "use the current value," every unit's share is recomputed together
+    # against the refreshed balances and re-confirmed before writing, since
+    # one unit's balance changing shifts what's fair for every other unit
+    # in the same batch too.
+    while True:
+        for u in units:
+            if not _status_unchanged(u["row_index"], u["current_status"]):
+                _warn(f"{u['sku']}: status has changed since you started (no longer '{u['current_status']}'). "
+                      f"Another session may have just updated it — nothing in this batch was written. "
+                      f"Please re-check and start the bulk payment again.")
+                return False
+
+        conflicts = []
+        for u in units:
+            fresh_outstanding = _sheet_float(get_row_by_sheet_index(u["row_index"]).get("Amount Outstanding (USD)"))
+            if round(fresh_outstanding, 2) != round(u["outstanding"], 2):
+                conflicts.append((u, fresh_outstanding))
+
+        if not conflicts:
+            break  # every unit's balance still matches what the allocation was built from
+
+        any_use_current = False
+        for u, fresh_outstanding in conflicts:
+            resolution = _resolve_outstanding_conflict(u["sku"], u["outstanding"], fresh_outstanding)
+            if resolution is None:
+                print("\nBulk payment cancelled. Nothing was written. Returning to Main Menu.")
+                return False
+            if resolution == "use_current":
+                u["outstanding"] = fresh_outstanding
+                u["received"] = _sheet_float(get_row_by_sheet_index(u["row_index"]).get("Amount Received (USD)"))
+                any_use_current = True
+            # "restore": leave u["outstanding"] as the original baseline --
+            # the allocation already computed from it is still correct, and
+            # writing it back is itself the restoration.
+
+        if any_use_current:
+            new_total_outstanding = round(sum(u["outstanding"] for u in units), 2)
+            if payment > new_total_outstanding:
+                _warn(f"The payment of ${payment:,.2f} now exceeds the batch's current total outstanding "
+                      f"of ${new_total_outstanding:,.2f}. Please re-enter the payment amount.")
+                payment = None
+                while payment is None:
+                    payment = ask_number(
+                        f"Total Payment Received (USD) (total outstanding is ${new_total_outstanding:,.2f}):",
+                        allow_zero=False,
+                    )
+                    if payment > round(new_total_outstanding, 2):
+                        _warn(f"This amount exceeds the total outstanding balance of ${new_total_outstanding:,.2f}. "
+                              f"Please enter ${new_total_outstanding:,.2f} or less.")
+                        payment = None
+            _allocate(units, payment)
+            _show_bulk_summary(units, payment)
+            if not ask_yes_no(f"\nWrite this payment ({len(units)} units) to the master sheet?"):
+                print("\nBulk payment cancelled. Nothing was written. Returning to Main Menu.")
+                return False
+        # loop again -- re-verify against the sheet once more before writing
+
+    _write_batch_intent_log(
+        "record_outstanding_payment_bulk",
+        [{"sku": u["sku"], "amount": u["payment_share"]} for u in units],
+        payment,
+    )
+
+    succeeded, failed_sku, failed_err, not_attempted = [], None, None, []
+    for u in units:
+        if failed_sku is not None:
+            not_attempted.append(u["sku"])
+            continue
+        try:
+            if u["new_status"] == "Sold":
+                note_append = (
+                    f"[{payment_date_str} · PAYMENT] Final payment of ${u['payment_share']:,.2f} received via "
+                    f"{payment_method}. Fully settled."
+                )
+            else:
+                note_append = (
+                    f"[{payment_date_str} · PAYMENT] Partial payment of ${u['payment_share']:,.2f} received via "
+                    f"{payment_method}. ${u['new_outstanding']:,.2f} still outstanding."
+                )
+            updated_notes = _fresh_notes_append(u["row_index"], "Transaction Notes", [note_append])
+            update_row(u["row_index"], {
+                "Amount Received (USD)": "" if u["new_status"] == "Sold" else u["new_received"],
+                "Amount Outstanding (USD)": "" if u["new_status"] == "Sold" else u["new_outstanding"],
+                "Status": u["new_status"],
+                "Transaction Notes": updated_notes,
+            })
+            succeeded.append(u["sku"])
+        except Exception as e:
+            failed_sku, failed_err = u["sku"], str(e)
+
+    _clear_batch_intent_log()
+
+    if succeeded:
+        print(f"\n\033[38;5;202m✓ Payment of ${payment:,.2f} recorded across {len(succeeded)} "
+              f"unit{'s' if len(succeeded) != 1 else ''}: {', '.join(succeeded)}\033[0m")
+    if failed_sku is not None:
+        print(f"\n\033[91m✗ Failed to write {failed_sku}: {failed_err}\033[0m")
+        if not_attempted:
+            print(f"\033[91m  The following units were not attempted: {', '.join(not_attempted)}\033[0m")
+
+    return ask_yes_no("Record another payment?")
 
 
 def cancel_sale():
