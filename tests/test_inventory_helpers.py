@@ -9,6 +9,7 @@ claim to hold -- not speculative edge cases.
 
 Run: pytest tests/test_inventory_helpers.py -v
 """
+import json
 from datetime import date
 
 import pytest
@@ -282,25 +283,25 @@ class TestReservationDays:
 # ── get_margin_color / get_markup_color / get_status_color ──────────────────────
 class TestColorTiers:
     def test_margin_color_boundaries_hero_tier(self):
-        # Hero weaves (Kanjivaram/Gadwal/Banaras): flag below 20%, target 25%+
-        assert inv.get_margin_color(19.99, "Kanjivaram") == "\033[31m"   # red, below 20
-        assert inv.get_margin_color(20.0, "Kanjivaram") == "\033[93m"    # yellow, exactly at 20
-        assert inv.get_margin_color(24.99, "Kanjivaram") == "\033[93m"   # yellow, below 25
-        assert inv.get_margin_color(25.0, "Kanjivaram") == "\033[32m"    # green, exactly at 25
+        # Hero weaves (Kanjivaram/Gadwal/Banaras): flag below 25%, target 30%+
+        assert inv.get_margin_color(24.99, "Kanjivaram") == "\033[31m"   # red, below 25
+        assert inv.get_margin_color(25.0, "Kanjivaram") == "\033[93m"    # yellow, exactly at 25
+        assert inv.get_margin_color(29.99, "Kanjivaram") == "\033[93m"   # yellow, below 30
+        assert inv.get_margin_color(30.0, "Kanjivaram") == "\033[32m"    # green, exactly at 30
 
     def test_margin_color_boundaries_supplemental_tier(self):
-        # Supplemental weaves (everything else): flag below 15%, target 18%+
-        assert inv.get_margin_color(14.99, "Chanderi") == "\033[31m"     # red, below 15
-        assert inv.get_margin_color(15.0, "Chanderi") == "\033[93m"      # yellow, exactly at 15
-        assert inv.get_margin_color(17.99, "Chanderi") == "\033[93m"     # yellow, below 18
-        assert inv.get_margin_color(18.0, "Chanderi") == "\033[32m"      # green, exactly at 18
+        # Supplemental weaves (everything else): flag below 18%, target 20%+
+        assert inv.get_margin_color(17.99, "Chanderi") == "\033[31m"     # red, below 18
+        assert inv.get_margin_color(18.0, "Chanderi") == "\033[93m"      # yellow, exactly at 18
+        assert inv.get_margin_color(19.99, "Chanderi") == "\033[93m"     # yellow, below 20
+        assert inv.get_margin_color(20.0, "Chanderi") == "\033[32m"      # green, exactly at 20
 
     def test_margin_color_blouse_never_hero_even_with_hero_name(self):
         # "Kanjivaram Silk Blouse" carries the hero family name but is an
         # accessory piece, not the hero saree -- should use the
-        # supplemental thresholds (flag below 15%), not hero (flag below 20%).
-        assert inv.get_margin_color(18.0, "Kanjivaram Silk Blouse") == "\033[32m"   # green under supplemental
-        assert inv.get_margin_color(14.99, "Kanjivaram Silk Blouse") == "\033[31m"  # red under supplemental
+        # supplemental thresholds (flag below 18%), not hero (flag below 25%).
+        assert inv.get_margin_color(20.0, "Kanjivaram Silk Blouse") == "\033[32m"   # green under supplemental
+        assert inv.get_margin_color(17.99, "Kanjivaram Silk Blouse") == "\033[31m"  # red under supplemental
 
     def test_is_hero_weave(self):
         assert inv._is_hero_weave("Kanjivaram") is True
@@ -419,3 +420,130 @@ class TestGetUnassignedSkusForCategory:
     def test_no_matches_returns_empty_list(self, capsys):
         raw_rows = [["header"] * 39]
         assert inv.get_unassigned_skus_for_category("KKVSV", raw_rows) == []
+
+
+# ── _allocate_proportional_payment ──────────────────────────────────────────────
+# Shared by Record a Sale's bulk partial payment and Record an Outstanding
+# Payment's bulk installments (docs/Bulk_Payment_Scoping_Op6_Op7.md §2). The
+# scenario that started this design: an uneven bulk purchase (one cheap unit,
+# several pricier ones) where a naive even split pays the cheap unit off
+# first as a pure artifact of the math, not a real allocation decision.
+class TestAllocateProportionalPayment:
+    def test_equal_balances_matches_even_split(self):
+        shares = inv._allocate_proportional_payment(300.0, [100.0, 100.0, 100.0])
+        assert shares == [100.0, 100.0, 100.0]
+
+    def test_uneven_balances_split_proportionally(self):
+        # The original flaw scenario: a $250 unit alongside two $500 units.
+        # An even split would have given the $250 unit $100 -- more than it
+        # could ever owe. Proportional allocation gives it only its fair
+        # 20% share instead.
+        shares = inv._allocate_proportional_payment(300.0, [250.0, 500.0, 500.0])
+        assert shares == [60.0, 120.0, 120.0]
+        assert round(sum(shares), 2) == 300.0
+
+    def test_payment_equal_to_total_gives_each_unit_its_own_balance(self):
+        shares = inv._allocate_proportional_payment(191.34, [123.45, 67.89])
+        assert shares == [123.45, 67.89]
+
+    def test_rounding_remainder_absorbed_by_last_unit(self):
+        # 100 split three ways by 1/3 doesn't divide evenly into cents --
+        # the total must still reconcile exactly to the entered payment.
+        shares = inv._allocate_proportional_payment(100.0, [100.0, 100.0, 100.0])
+        assert shares == [33.33, 33.33, 33.34]
+        assert round(sum(shares), 2) == 100.0
+
+    def test_ratio_preserved_after_a_payment_so_units_clear_together(self):
+        # A 1:2 price ratio must still be a 1:2 ratio in what's left owed
+        # after a payment -- this is what keeps every unit in a batch
+        # reaching $0 at the same time instead of the cheaper one finishing
+        # first. Confirmed algebraically, not just spot-checked once.
+        balances = [200.0, 400.0]
+        shares = inv._allocate_proportional_payment(90.0, balances)
+        remaining = [round(b - s, 2) for b, s in zip(balances, shares)]
+        assert remaining[1] == remaining[0] * 2
+
+    def test_single_unit_batch_gets_the_full_payment(self):
+        shares = inv._allocate_proportional_payment(200.0, [500.0])
+        assert shares == [200.0]
+
+    def test_zero_total_balance_returns_all_zero(self):
+        assert inv._allocate_proportional_payment(0.0, [0.0, 0.0]) == [0.0, 0.0]
+
+    def test_defensive_cap_never_exceeds_a_units_own_balance(self):
+        # Callers are expected to validate payment <= sum(balances) before
+        # calling this -- this pins down the backstop for if that's ever
+        # violated anyway, rather than silently handing a unit more credit
+        # than it could possibly owe.
+        shares = inv._allocate_proportional_payment(500.0, [100.0, 100.0])
+        assert shares == [100.0, 100.0]
+
+
+# ── bulk write-intent log ────────────────────────────────────────────────────────
+# Op 6/Op 7 bulk-specific (docs/Bulk_Payment_Scoping_Op6_Op7.md §8.5). Not a
+# recovery mechanism -- a real exception is already caught and reported by
+# main_menu()'s own handler. This covers the case that can't: a hard crash
+# that never raises a Python exception at all, where the confirmation table
+# showing what was about to happen is gone along with the terminal. Each test
+# points _BULK_INTENT_LOG_PATH at a throwaway tmp_path file so these never
+# touch the real one.
+class TestBulkIntentLog:
+    def test_write_then_read_back(self, tmp_path, monkeypatch):
+        log_path = tmp_path / "intent.json"
+        monkeypatch.setattr(inv, "_BULK_INTENT_LOG_PATH", str(log_path))
+        inv._write_batch_intent_log("record_sale_bulk", [{"sku": "LAH-TEST100", "amount": 60.0}], 300.0)
+        assert log_path.exists()
+        payload = json.loads(log_path.read_text())
+        assert payload["operation"] == "record_sale_bulk"
+        assert payload["total"] == 300.0
+        assert payload["units"] == [{"sku": "LAH-TEST100", "amount": 60.0}]
+
+    def test_clear_removes_the_file(self, tmp_path, monkeypatch):
+        log_path = tmp_path / "intent.json"
+        monkeypatch.setattr(inv, "_BULK_INTENT_LOG_PATH", str(log_path))
+        inv._write_batch_intent_log("record_sale_bulk", [], 0.0)
+        assert log_path.exists()
+        inv._clear_batch_intent_log()
+        assert not log_path.exists()
+
+    def test_clear_when_nothing_to_clear_is_a_silent_no_op(self, tmp_path, monkeypatch):
+        log_path = tmp_path / "does-not-exist.json"
+        monkeypatch.setattr(inv, "_BULK_INTENT_LOG_PATH", str(log_path))
+        inv._clear_batch_intent_log()  # must not raise
+
+    def test_leftover_check_does_nothing_when_no_file_present(self, tmp_path, monkeypatch, capsys):
+        log_path = tmp_path / "does-not-exist.json"
+        monkeypatch.setattr(inv, "_BULK_INTENT_LOG_PATH", str(log_path))
+        inv._check_leftover_batch_intent_log()
+        assert capsys.readouterr().out == ""
+
+    def test_leftover_check_surfaces_intent_and_clears_on_acknowledgement(self, tmp_path, monkeypatch, capsys):
+        log_path = tmp_path / "intent.json"
+        monkeypatch.setattr(inv, "_BULK_INTENT_LOG_PATH", str(log_path))
+        monkeypatch.setattr(inv, "ask_yes_no", lambda prompt: True)
+        inv._write_batch_intent_log("record_sale_bulk", [{"sku": "LAH-TEST100", "amount": 60.0}], 300.0)
+
+        inv._check_leftover_batch_intent_log()
+
+        out = capsys.readouterr().out
+        assert "UNFINISHED BULK" in out
+        assert "LAH-TEST100" in out
+        assert "$300.00" in out
+        assert not log_path.exists()  # acknowledged -> cleared
+
+    def test_leftover_check_leaves_file_in_place_when_not_acknowledged(self, tmp_path, monkeypatch, capsys):
+        log_path = tmp_path / "intent.json"
+        monkeypatch.setattr(inv, "_BULK_INTENT_LOG_PATH", str(log_path))
+        monkeypatch.setattr(inv, "ask_yes_no", lambda prompt: False)
+        inv._write_batch_intent_log("record_sale_bulk", [{"sku": "LAH-TEST100", "amount": 60.0}], 300.0)
+
+        inv._check_leftover_batch_intent_log()
+
+        assert log_path.exists()  # not acknowledged -> left for next launch to surface again
+
+    def test_leftover_check_clears_corrupted_log_without_crashing(self, tmp_path, monkeypatch, capsys):
+        log_path = tmp_path / "intent.json"
+        log_path.write_text("not valid json")
+        monkeypatch.setattr(inv, "_BULK_INTENT_LOG_PATH", str(log_path))
+        inv._check_leftover_batch_intent_log()  # must not raise
+        assert not log_path.exists()

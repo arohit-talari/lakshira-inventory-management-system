@@ -6,3 +6,6 @@ __pycache__/
 .venv/
 .pytest_cache/
 Reports/
+# Bulk write-intent log (Record a Sale / Record an Outstanding Payment) --
+# runtime state only, should exist only if a batch write crashed mid-write
+inventory_management_system/.bulk_write_intent.json

@@ -5,6 +5,7 @@
 import os
 import sys
 import re
+import json
 import shlex
 import termios
 import time
@@ -496,6 +497,113 @@ def _fresh_notes_append(row_index, notes_column, new_lines):
     current_notes = get_row_by_sheet_index(row_index).get(notes_column, "").strip()
     block = "\n".join(new_lines)
     return f"{current_notes}\n{block}".strip() if current_notes else block
+
+
+def _allocate_proportional_payment(payment, balances):
+    """
+    Split `payment` across `balances` (one remaining balance per unit)
+    proportional to each unit's share of the total -- shared by Record a
+    Sale's bulk partial-payment step and Record an Outstanding Payment's
+    bulk installments, see docs/Bulk_Payment_Scoping_Op6_Op7.md §2. The
+    same formula covers both: at the point of sale every balance is just
+    that unit's own price (nothing's been paid yet), on every later
+    installment it's whatever's actually still outstanding -- so a cheap
+    unit and an expensive unit in the same batch both clear at the same
+    overall percentage paid off, instead of the cheap one finishing first.
+
+    Every share but the last is computed directly from its ratio; the
+    last absorbs whatever rounding remainder is left so the shares always
+    sum back to exactly `payment`, never a cent off. Each share is also
+    capped at its own balance as a defensive backstop -- shouldn't ever
+    trigger given payment is expected to already be <= sum(balances), but
+    no unit's share should ever be allowed to exceed what it could
+    possibly still owe.
+    """
+    total_balance = sum(balances)
+    if total_balance <= 0:
+        return [0.0] * len(balances)
+    shares = []
+    running_total = 0.0
+    last = len(balances) - 1
+    for i, bal in enumerate(balances):
+        if i == last:
+            share = round(payment - running_total, 2)
+        else:
+            share = round(payment * (bal / total_balance), 2)
+        share = max(0.0, min(share, bal))
+        shares.append(share)
+        running_total += share
+    return shares
+
+
+_BULK_INTENT_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".bulk_write_intent.json")
+
+
+def _write_batch_intent_log(operation, entries, total):
+    """
+    Record what a bulk write loop is about to do, immediately before it
+    starts writing. Not a recovery mechanism -- a real exception during
+    the write is already caught and reported by main_menu()'s own handler
+    with a clean summary of what succeeded. This covers the case that
+    handler can't: a hard crash (process killed, power loss) that never
+    raises a Python exception at all, where the confirmation table that
+    showed what was about to happen is gone along with the terminal.
+    Cleared via _clear_batch_intent_log() the moment the batch loop
+    finishes, success or handled failure alike -- only a genuine hard
+    crash should ever leave this file behind for
+    _check_leftover_batch_intent_log() to find on the next launch.
+    """
+    payload = {
+        "operation": operation,
+        "started_at": datetime.now().isoformat(timespec="seconds"),
+        "total": total,
+        "units": entries,
+    }
+    try:
+        with open(_BULK_INTENT_LOG_PATH, "w") as f:
+            json.dump(payload, f, indent=2)
+    except OSError:
+        pass  # best-effort -- never block a real write over a logging failure
+
+
+def _clear_batch_intent_log():
+    try:
+        os.remove(_BULK_INTENT_LOG_PATH)
+    except (FileNotFoundError, OSError):
+        pass
+
+
+def _check_leftover_batch_intent_log():
+    """
+    Called once at the start of Record a Sale and Record an Outstanding
+    Payment. If a prior run's intent log is still here, that run never
+    reached _clear_batch_intent_log() -- almost certainly a hard crash
+    rather than a handled error, those are already caught and cleaned up
+    elsewhere. Surfaces exactly what that batch intended so the sheet can
+    be checked against it, unit by unit, before anything new is written.
+    """
+    if not os.path.exists(_BULK_INTENT_LOG_PATH):
+        return
+    try:
+        with open(_BULK_INTENT_LOG_PATH) as f:
+            payload = json.load(f)
+    except (OSError, ValueError):
+        _clear_batch_intent_log()
+        return
+    print(f"\n\033[91m⚠  UNFINISHED BULK {str(payload.get('operation', 'operation')).upper()} DETECTED\033[0m")
+    print(f"\033[2m{'—' * 60}\033[0m")
+    print(f"A previous bulk batch started {payload.get('started_at', 'an unknown time')} "
+          f"may not have finished writing to the sheet.")
+    _entries = payload.get("units", [])
+    print(f"It intended to apply ${_sheet_float(payload.get('total', 0)):,.2f} total across "
+          f"{len(_entries)} unit(s):")
+    for u in _entries:
+        print(f"  {str(u.get('sku', '?')):<14}${_sheet_float(u.get('amount', 0)):,.2f}")
+    print(f"\033[2m{'—' * 60}\033[0m")
+    print("Please check each of these units on the master sheet before proceeding --")
+    print("compare their current Amount Received / Amount Outstanding against what's listed above.")
+    if ask_yes_no("Acknowledge and clear this notice?"):
+        _clear_batch_intent_log()
 
 
 # =============================================================================
@@ -1293,12 +1401,13 @@ def _is_hero_weave(weave_type):
     return any(kw in weave_type for kw in _HERO_WEAVE_KEYWORDS)
 
 def _margin_thresholds(weave_type):
-    """(flag_below, target_floor) for margin, tier-aware: hero categories
-    carry a materially higher bar than supplemental ones, rather than one
-    flat threshold applied to every weave type regardless of tier."""
+    """(flag_below, target_floor) for margin, tier-aware per the client's
+    2026-09-06 answer: hero categories carry a materially higher bar
+    than supplemental ones, replacing the old flat 15% line used for
+    every weave type."""
     if _is_hero_weave(weave_type):
-        return 20, 25   # flag below 20%; target 25-30%+
-    return 15, 18        # flag below 15%; target 18-22%
+        return 25, 30   # flag below 25%; target 30-35%+
+    return 18, 20        # flag below 18%; target 20-25%
 
 def get_margin_color(margin_pct, weave_type):
     """Return ANSI color code for margin %, tier-aware: hero weaves
@@ -3760,7 +3869,30 @@ def ask_payment_method():
 
 def record_sale():
     print("\n--- \033[1;38;5;124mRECORD A SALE\033[0m ---")
+    _check_leftover_batch_intent_log()
 
+    while True:
+        raw = input(f"\n\033[1mHow many units are part of this sale? (press Enter for 1):\033[0m {_ANSWER_COLOR}").strip()
+        print("\033[0m", end="")
+        if not raw:
+            batch_size = 1
+            break
+        try:
+            batch_size = int(raw)
+            if batch_size < 1:
+                _warn("Please enter a number of 1 or more.")
+                continue
+            break
+        except ValueError:
+            _warn("Please enter a valid whole number.")
+
+    if batch_size == 1:
+        _record_single_sale()
+    else:
+        _record_bulk_sale(batch_size)
+
+
+def _record_single_sale():
     # Steps 1–2: SKU lookup + confirmation (loops on wrong unit)
     while True:
         sku = ask_text("SKU:", blank_message="SKU cannot be left blank. Please enter a valid SKU (e.g. LAH-KKVSV500).")
@@ -4167,6 +4299,473 @@ def record_sale():
             ws.update_cells(backfill_cells, value_input_option="USER_ENTERED")
 
     print(f"\n\033[38;5;202m✓ {sku} sold to {customer_name}.\033[0m")
+    purchase_count = count_customer_purchases(customer_name, customer_country_code, customer_phone, customer_email)
+    print(f"\n{customer_name} now has {purchase_count} purchase{'s' if purchase_count != 1 else ''} on record.")
+
+
+def _record_bulk_sale(batch_size):
+    """
+    Bulk sale for N > 1 units in one purchase. Reuses every underlying
+    building block _record_single_sale() uses for a given unit (SKU
+    lookup, the discount/margin-alert loop, check_pricing_warnings-style
+    rejection rules) -- same per-unit validation as the single-unit flow,
+    just looped, with genuinely purchase-wide fields (Customer, Sales
+    Channel, Date Sold, Payment Method) asked once instead of per unit.
+    See docs/Bulk_Payment_Scoping_Op6_Op7.md for the full design.
+
+    Payment is asked once as a single total for the whole purchase, not a
+    batch-wide Paid in full / Partial toggle -- a customer buying several
+    units is never asked to designate which specific units are paid in
+    full versus partial, she hands over one lump sum and allocating it is
+    this system's own decision (§8.2). That total is split across units
+    via _allocate_proportional_payment(), weighted by each unit's own
+    price (nothing's been paid yet at the point of sale, so "remaining
+    balance" and "price" are the same number here) -- each unit's
+    resulting Sold / Sold - Partial Payment status falls out of the math
+    per unit, not from one blanket answer for the whole batch.
+
+    If any selected unit's status or cost/price fields change between
+    selection and the final write (a concurrent edit elsewhere), the
+    whole batch is aborted with nothing written, never a silent partial
+    apply -- the lump sum was entered against the full original set, so
+    one unit dropping out invalidates every other unit's computed share
+    too, not just the one that changed.
+    """
+    print(f"\n--- \033[1;38;5;124mBULK SALE MODE ({batch_size} units)\033[0m ---")
+
+    sales_channel = questionary.select(
+        "",
+        choices=SALES_CHANNELS + [questionary.Separator(" "), _back_choice("Return to Main Menu")],
+        qmark="\nSales Channel:",
+        instruction=" ",
+        style=_MENU_STYLE,
+    ).unsafe_ask()
+    if sales_channel is None or sales_channel == "Return to Main Menu":
+        print("\nBulk sale cancelled. Nothing was written. Returning to Main Menu.")
+        return
+
+    raw_rows_for_customer = get_raw_rows()
+    while True:
+        selected = search_and_select_customer(raw_rows_for_customer)
+        if selected == "__CANCEL__":
+            print("\nBulk sale cancelled. Nothing was written. Returning to Main Menu.")
+            return
+        if selected is None:
+            customer = enter_new_customer(raw_rows=raw_rows_for_customer)
+        elif isinstance(selected, tuple) and selected[0] == "__NEW__":
+            customer = enter_new_customer(prefill_name=selected[1], raw_rows=raw_rows_for_customer)
+        else:
+            customer = update_customer_details_if_needed(selected, raw_rows_for_customer)
+        if customer is not None:
+            break
+
+    customer_name         = customer["name"]
+    customer_country_code = customer["country_code"]
+    customer_phone        = customer["phone"]
+    customer_email        = customer["email"]
+    customer_city         = customer["city"]
+    customer_state        = customer["state"]
+    customer_country      = customer["country"]
+    if not customer_country_code and customer_country:
+        _derived_cc = _calling_code_for_country(customer_country)
+        if _derived_cc:
+            customer_country_code = _fmt_dial_code(_derived_cc)
+
+    # Per-unit loop -- SKU selection + discount/margin-alert, same rules as
+    # the single-unit flow, with an explicit "Skip this unit" escape at
+    # each decision point so one problematic unit doesn't take the whole
+    # batch down with it.
+    units = []
+    used_skus_this_batch = set()
+    for i in range(1, batch_size + 1):
+        print(f"\n--- \033[1;38;5;124mSALE ENTRY ({i} of {batch_size})\033[0m ---")
+        skip_unit = False
+
+        while True:
+            sku = ask_text("SKU:", blank_message="SKU cannot be left blank. Please enter a valid SKU (e.g. LAH-KKVSV500).")
+            if sku in used_skus_this_batch:
+                _warn(f"{sku} is already part of this batch. Please enter a different SKU.")
+                continue
+            row_index = find_row_index_by_sku(sku)
+            if row_index is None:
+                _warn(f"SKU '{sku}' was not found in the master sheet. Please check the SKU and try again.")
+                continue
+
+            row = get_row_by_sheet_index(row_index)
+            current_status = row.get("Status", "").strip()
+
+            if current_status == "Unassigned":
+                _warn(f"SKU '{sku}' is Unassigned. It cannot be sold. Please assign it first via 'Add New Inventory'.")
+                continue
+            if current_status in ("Sold", "Sold - Partial Payment"):
+                _warn(f"SKU '{sku}' has already been recorded as '{current_status}'. A sale cannot be recorded again.")
+                continue
+            if current_status not in ("Available", "Reserved"):
+                _warn(f"SKU '{sku}' has status '{current_status}', which is not valid for recording a sale.")
+                continue
+
+            _status_color = get_status_color(current_status)
+            _res_expired  = False
+
+            _cost_cols = ["Total Cost (USD)", "Selling Price (USD)"]
+            _blank_cost_cols = [c for c in _cost_cols if not str(row.get(c, "")).strip()]
+            if _blank_cost_cols:
+                _label = _blank_cost_cols[0] if len(_blank_cost_cols) == 1 else f"{len(_blank_cost_cols)} fields"
+                _warn(f"{_label} blank or unreadable on the sheet for this unit -- every figure below that "
+                      f"depends on it is being shown as $0.00, which may not be correct. Verify directly on "
+                      f"the sheet before relying on these numbers.")
+
+            selling_price_fmt = f"${_sheet_float(row.get('Selling Price (USD)', '')):,.2f}"
+            _unit_rows = [
+                f"  \033[1m{'SKU:':<18}\033[0m{row['SKU']}",
+                f"  \033[1m{'Weave Type:':<18}\033[0m{row['Weave Type / Cluster']}",
+                f"  \033[1m{'Supplier:':<18}\033[0m{row['Supplier']}",
+                f"  \033[1m{'Date Acquired:':<18}\033[0m{row['Date Acquired']}",
+                f"  \033[1m{'Selling Price:':<18}\033[0m{selling_price_fmt}",
+            ]
+            _sections = [("UNIT", _unit_rows)]
+            if current_status == "Reserved":
+                _rdate        = row.get("Reserved Date", "").strip()
+                _reserver_cur = _get_reserver_name(row.get("Inventory Notes", "")) or "—"
+                _res_rows = [
+                    f"  \033[1m{'Reserved By:':<18}\033[0m{_reserver_cur}",
+                    f"  \033[1m{'Reserved Date:':<18}\033[0m{_rdate}",
+                ]
+                if _rdate:
+                    _days_res, _res_expired = _reservation_days(_rdate)
+                    if _days_res is not None:
+                        _dr_color = "\033[91m" if _res_expired else "\033[92m"
+                        _res_rows.append(f"  \033[1m{'Days Reserved:':<18}\033[0m{_dr_color}{_days_res} of 7\033[0m")
+                _res_rows.append(f"  \033[1m{'Status:':<18}\033[0m{_status_color}{current_status}\033[0m")
+                _sections.append(("RESERVATION", _res_rows))
+            else:
+                _sections.append(("STATUS", [f"  \033[1m{'Status:':<18}\033[0m{_status_color}{current_status}\033[0m"]))
+            _print_boxed("CURRENT RECORD", _sections)
+            if _res_expired:
+                _warn("Reservation has exceeded the 7-day maximum.")
+
+            confirm_choice = questionary.select(
+                "",
+                choices=["Yes, use this unit", "No, try a different SKU",
+                         questionary.Separator(" "), _back_choice("Skip this unit")],
+                qmark="\nIs this the correct unit?",
+                instruction=" ",
+                style=_MENU_STYLE,
+            ).unsafe_ask()
+            if confirm_choice == "No, try a different SKU":
+                continue
+            if confirm_choice == "Skip this unit":
+                skip_unit = True
+            break
+
+        if skip_unit:
+            print(f"\nUnit {i} skipped — no data will be recorded for this unit.")
+            continue
+
+        date_acquired = _safe_parse_date(row.get("Date Acquired", ""))
+        if date_acquired is None:
+            _warn(f"{sku}: Date Acquired is blank or unreadable on the sheet. Please correct it on the "
+                  f"sheet before including this unit in a sale.")
+            print(f"\nUnit {i} skipped — no data will be recorded for this unit.")
+            continue
+
+        selling_price_usd = _sheet_float(row["Selling Price (USD)"])
+        total_cost_usd = _sheet_float(row["Total Cost (USD)"])
+
+        has_discount = ask_yes_no(f"Was a discount applied to {sku}?")
+        discount_pct = None
+
+        if has_discount:
+            discount_pct = ask_percent("Discount Percentage:", allow_zero=False)
+
+        if not has_discount:
+            actual_selling_price_usd = selling_price_usd
+            gross_profit_usd = round(actual_selling_price_usd - total_cost_usd, 2)
+            markup_pct = round((gross_profit_usd / total_cost_usd) * 100, 2) if total_cost_usd else 0
+            margin_pct = round((gross_profit_usd / actual_selling_price_usd) * 100, 2) if actual_selling_price_usd else 0
+        else:
+            while True:
+                if discount_pct is not None:
+                    actual_selling_price_usd = round(selling_price_usd * (1 - discount_pct / 100), 2)
+                else:
+                    actual_selling_price_usd = selling_price_usd
+                gross_profit_usd = round(actual_selling_price_usd - total_cost_usd, 2)
+                markup_pct = round((gross_profit_usd / total_cost_usd) * 100, 2) if total_cost_usd else 0
+                margin_pct = round((gross_profit_usd / actual_selling_price_usd) * 100, 2) if actual_selling_price_usd else 0
+
+                _pricing_desc = "This discount puts" if discount_pct is not None else "This unit's full price (no discount) puts"
+                if gross_profit_usd < 0:
+                    print(f"\n\033[91m⚠  BELOW COST\033[0m")
+                    print(f"\033[2m{'—' * 50}\033[0m")
+                    print(f"{_pricing_desc} Gross Profit at ${gross_profit_usd:,.2f}. The unit will sell at a loss.")
+                elif margin_pct < _margin_thresholds(row["Weave Type / Cluster"])[0]:
+                    _flag_below = _margin_thresholds(row["Weave Type / Cluster"])[0]
+                    print(f"\n{get_margin_color(margin_pct, row['Weave Type / Cluster'])}△ LOW MARGIN — "
+                          f"Margin sits at {margin_pct:.1f}%, below the {_flag_below}% threshold.\033[0m")
+                else:
+                    break
+
+                print()
+                _proceed_label = "Proceed with current discount" if discount_pct is not None else "Proceed at full price"
+                _choices = ["Re-enter discount percentage"]
+                if discount_pct is not None:
+                    _choices.append("Remove discount and proceed at full price")
+                _choices += [_proceed_label, questionary.Separator(" "), _back_choice("Skip this unit")]
+                alert_choice = questionary.select(
+                    "",
+                    choices=_choices,
+                    qmark="How would you like to proceed?",
+                    instruction=" ",
+                    style=_MENU_STYLE,
+                ).unsafe_ask()
+                if alert_choice == "Skip this unit":
+                    skip_unit = True
+                    break
+                if alert_choice == "Re-enter discount percentage":
+                    discount_pct = ask_percent("Discount Percentage:", allow_zero=False)
+                    continue
+                if alert_choice == "Remove discount and proceed at full price":
+                    discount_pct = None
+                    continue
+                break
+
+        if skip_unit:
+            print(f"\nUnit {i} skipped — no data will be recorded for this unit.")
+            continue
+
+        _gp_sign = signed(gross_profit_usd)
+        _mc  = get_margin_color(margin_pct, row["Weave Type / Cluster"])
+        _gpc = "\033[92m" if gross_profit_usd >= 0 else "\033[91m"
+        _unit_summary_rows = [
+            f"  \033[1m{'SKU:':<20}\033[0m{sku}",
+            f"  \033[1m{'Weave Type:':<20}\033[0m{row['Weave Type / Cluster']}",
+            f"  \033[1m{'Selling Price:':<20}\033[0m${selling_price_usd:,.2f}",
+        ]
+        if discount_pct:
+            _unit_summary_rows.append(f"  \033[1m{'Discount:':<20}\033[0m{discount_pct:.1f}%")
+        _unit_summary_rows.append(f"  \033[1m{'Unit Sold For:':<20}\033[0m${actual_selling_price_usd:,.2f}")
+        _unit_summary_rows.append(f"  \033[1m{'Gross Profit:':<20}\033[0m{_gpc}{_gp_sign}${abs(gross_profit_usd):,.2f}\033[0m")
+        _unit_summary_rows.append(f"  \033[1m{'Margin:':<20}\033[0m{_mc}{margin_pct:.1f}%\033[0m")
+        _print_boxed("UNIT SUMMARY", [("UNIT", _unit_summary_rows)])
+
+        if not ask_yes_no("Add this unit to the batch?"):
+            print(f"\nUnit {i} skipped — no data will be recorded for this unit.")
+            continue
+
+        units.append({
+            "row_index": row_index,
+            "row_snapshot": row,
+            "sku": sku,
+            "weave_type": row["Weave Type / Cluster"],
+            "current_status": current_status,
+            "date_acquired": date_acquired,
+            "selling_price_usd": selling_price_usd,
+            "total_cost_usd": total_cost_usd,
+            "discount_pct": discount_pct,
+            "actual_selling_price_usd": actual_selling_price_usd,
+            "gross_profit_usd": gross_profit_usd,
+            "markup_pct": markup_pct,
+            "margin_pct": margin_pct,
+        })
+        used_skus_this_batch.add(sku)
+
+    if not units:
+        print("\nNo units were entered — nothing to write. Returning to Main Menu.")
+        return
+
+    # Date Sold -- batch-common. A customer may spend several days curating
+    # a bulk selection, but the sale itself happens the day she finalizes
+    # the full set, not across the days she was deciding -- so this must
+    # be on or after every selected unit's own Date Acquired, i.e. the
+    # latest one in the batch.
+    max_acquired = max(u["date_acquired"] for u in units)
+    date_sold = ask_date(
+        "Date Sold", not_future=True, not_before=max_acquired,
+        future_msg="Sales cannot be recorded in the future. Please enter a current or past date.",
+        not_before_msg=f"Date Sold cannot be before the most recent Date Acquired in this batch "
+                        f"({max_acquired.strftime('%m-%d-%Y')}).",
+    )
+    date_sold_str = date_sold.strftime("%m-%d-%Y")
+
+    # Payment -- one total for the whole purchase, allocated proportionally
+    # (see docs/Bulk_Payment_Scoping_Op6_Op7.md §8.2). "Paid in full" is
+    # just the total equaling the batch total, not a separate code path --
+    # each unit's resulting status falls out of the allocation, not a
+    # batch-wide toggle.
+    total_price = round(sum(u["actual_selling_price_usd"] for u in units), 2)
+    print()
+    paid_in_full = ask_yes_no(f"Was this purchase (${total_price:,.2f} total) paid in full?")
+    if paid_in_full:
+        amount_received_total = total_price
+    else:
+        amount_received_total = None
+        while amount_received_total is None:
+            amount_received_total = ask_number(
+                f"Total Amount Received (USD) (full price is ${total_price:,.2f}):",
+                allow_zero=False,
+            )
+            if amount_received_total > total_price:
+                _warn(f"Amount received (${amount_received_total:,.2f}) cannot exceed the batch total "
+                      f"(${total_price:,.2f}). Please enter a valid amount.")
+                amount_received_total = None
+
+    balances = [u["actual_selling_price_usd"] for u in units]
+    allocations = _allocate_proportional_payment(amount_received_total, balances)
+    for u, share in zip(units, allocations):
+        u["amount_received"] = share
+        outstanding = round(u["actual_selling_price_usd"] - share, 2)
+        if outstanding <= 0:
+            u["amount_outstanding"] = 0.0
+            u["new_status"] = "Sold"
+        else:
+            u["amount_outstanding"] = outstanding
+            u["new_status"] = "Sold - Partial Payment"
+
+    payment_method = ask_payment_method()
+
+    # Confirmation
+    _status_rows = [f"  \033[1m{'SKU':<14}{'Price':<12}{'Discount':<10}{'Received':<12}{'Outstanding':<13}Status\033[0m"]
+    for u in units:
+        _disc_str  = f"{u['discount_pct']:.1f}%" if u["discount_pct"] else "—"
+        _status_c  = get_status_color(u["new_status"])
+        _status_rows.append(
+            f"  {u['sku']:<14}${u['actual_selling_price_usd']:<11,.2f}{_disc_str:<10}"
+            f"${u['amount_received']:<11,.2f}${u['amount_outstanding']:<12,.2f}{_status_c}{u['new_status']}\033[0m"
+        )
+    total_outstanding = round(sum(u["amount_outstanding"] for u in units), 2)
+    _print_boxed(f"BULK SALE SUMMARY ({len(units)} units)", [
+        ("UNITS", _status_rows),
+        ("TRANSACTION", [
+            f"  \033[1m{'Customer:':<22}\033[0m{customer_name}",
+            f"  \033[1m{'Sales Channel:':<22}\033[0m{sales_channel}",
+            f"  \033[1m{'Date Sold:':<22}\033[0m{date_sold_str}",
+            f"  \033[1m{'Payment Method:':<22}\033[0m{payment_method}",
+        ]),
+        ("TOTALS", [
+            f"  \033[1m{'Total Price:':<22}\033[0m${total_price:,.2f}",
+            f"  \033[1m{'Total Received:':<22}\033[0m${amount_received_total:,.2f}",
+            f"  \033[1m{'Total Outstanding:':<22}\033[0m${total_outstanding:,.2f}",
+        ]),
+    ])
+
+    confirmed = ask_yes_no(f"\nWrite this sale ({len(units)} unit{'s' if len(units) != 1 else ''}) to the master sheet?")
+    if not confirmed:
+        print("\nBulk sale cancelled. Nothing was written. Returning to Main Menu.")
+        return
+
+    # Pre-write validation -- every selected unit is re-checked before any
+    # of them are written. A status or cost/price change on even one unit
+    # invalidates every other unit's computed share too (the lump sum was
+    # allocated against the full original set), so a conflict here aborts
+    # the whole batch rather than skipping just the one affected unit.
+    for u in units:
+        if not _status_unchanged(u["row_index"], u["current_status"]):
+            _warn(f"{u['sku']}: status has changed since you started (no longer '{u['current_status']}'). "
+                  f"Another session may have just updated it — nothing in this batch was written. "
+                  f"Please re-check and start the bulk sale again.")
+            return
+        _unchanged, _conflict_col = _row_fields_unchanged(
+            u["row_index"], u["row_snapshot"], {"Total Cost (USD)", "Selling Price (USD)"}
+        )
+        if not _unchanged:
+            _warn(f"{u['sku']}: '{_conflict_col}' has changed since you started — another session may have "
+                  f"just updated it. Nothing in this batch was written. Please re-check and start the bulk sale again.")
+            return
+
+    _write_batch_intent_log(
+        "record_sale_bulk",
+        [{"sku": u["sku"], "amount": u["amount_received"]} for u in units],
+        amount_received_total,
+    )
+
+    succeeded, failed_sku, failed_err, not_attempted = [], None, None, []
+    for u in units:
+        if failed_sku is not None:
+            not_attempted.append(u["sku"])
+            continue
+        try:
+            if u["new_status"] == "Sold":
+                auto_note = f"[{date_sold_str} · SALE] Paid in full: ${u['amount_received']:,.2f} received via {payment_method}."
+            else:
+                auto_note = (
+                    f"[{date_sold_str} · SALE] Initial partial payment of ${round(u['amount_received'], 2):,.2f} "
+                    f"received via {payment_method}. ${u['amount_outstanding']:,.2f} outstanding."
+                )
+            updates = {
+                "Date Sold": date_sold_str,
+                "Sales Channel": sales_channel,
+                "Customer Name": customer_name,
+                "Customer Country Code": _fmt_dial_code(customer_country_code),
+                "Customer Phone": customer_phone,
+                "Customer Email": customer_email,
+                "Customer City": customer_city,
+                "Customer State": customer_state,
+                "Customer Country": customer_country,
+                "Status": u["new_status"],
+                "Actual Selling Price (USD)": u["actual_selling_price_usd"],
+                "Gross Profit (USD)": u["gross_profit_usd"],
+                "Markup %": round(u["markup_pct"] / 100, 6),
+                "(Profit) Margin %": round(u["margin_pct"] / 100, 6),
+            }
+            if u["discount_pct"] is not None:
+                updates["Discount %"] = round(u["discount_pct"] / 100, 6)
+            if u["current_status"] == "Reserved":
+                updates["Reserved Date"] = ""
+                updates["Inventory Notes"] = _normalize_inventory_notes(_strip_reservation_note(
+                    get_row_by_sheet_index(u["row_index"]).get("Inventory Notes", "")
+                ))
+            if u["new_status"] == "Sold - Partial Payment":
+                updates["Amount Received (USD)"] = round(u["amount_received"], 2)
+                updates["Amount Outstanding (USD)"] = u["amount_outstanding"]
+            updates["Transaction Notes"] = _fresh_notes_append(u["row_index"], "Transaction Notes", [auto_note])
+
+            update_row(u["row_index"], updates)
+            succeeded.append(u["sku"])
+        except Exception as e:
+            failed_sku, failed_err = u["sku"], str(e)
+
+    _clear_batch_intent_log()
+
+    if succeeded:
+        print(f"\n\033[38;5;202m✓ {len(succeeded)} unit{'s' if len(succeeded) != 1 else ''} sold to "
+              f"{customer_name}: {', '.join(succeeded)}\033[0m")
+    if failed_sku is not None:
+        print(f"\n\033[91m✗ Failed to write {failed_sku}: {failed_err}\033[0m")
+        if not_attempted:
+            print(f"\033[91m  The following units were not attempted: {', '.join(not_attempted)}\033[0m")
+
+    # Backfill once for the whole batch -- raw_rows_for_customer was
+    # snapshotted before any of this batch's own units were written, so
+    # the batch's own new rows never leak into their own backfill pass.
+    if not isinstance(selected, (type(None), tuple)):
+        _backfill_fields = {
+            "Customer Country Code": _fmt_dial_code(customer_country_code),
+            "Customer Phone":        customer_phone,
+            "Customer Email":        customer_email,
+            "Customer City":         customer_city,
+            "Customer State":        customer_state,
+            "Customer Country":      customer_country,
+        }
+        prior_indices = find_customer_row_indices(
+            selected["name"], raw_rows_for_customer,
+            country_code=selected.get("country_code", ""),
+            phone=selected.get("phone", ""),
+            email=selected.get("email", ""),
+        )
+        backfill_cells = []
+        for row_num in prior_indices:
+            raw_row = raw_rows_for_customer[row_num - 1]
+            for col_name, new_val in _backfill_fields.items():
+                if not new_val:
+                    continue
+                col_idx = COLUMNS[col_name] - 1
+                current = raw_row[col_idx].strip() if len(raw_row) > col_idx else ""
+                if not current:
+                    backfill_cells.append(gspread.Cell(row=row_num, col=COLUMNS[col_name], value=_sheet_safe(new_val)))
+        if backfill_cells:
+            ws = connect_to_sheet()
+            ws.update_cells(backfill_cells, value_input_option="USER_ENTERED")
+
     purchase_count = count_customer_purchases(customer_name, customer_country_code, customer_phone, customer_email)
     print(f"\n{customer_name} now has {purchase_count} purchase{'s' if purchase_count != 1 else ''} on record.")
 

@@ -33,6 +33,8 @@ def _check_mode():
 
 def _enter_record_sale(child, sku):
     child.sendline("6")
+    child.expect("How many units are part of this sale")
+    child.sendline("")  # default 1
     child.expect("SKU:")
     child.sendline(sku)
     child.expect("Is this the correct unit\\?")
@@ -81,7 +83,7 @@ def _new_customer_flow(child, label, phone=None):
     phone/city/state -- shared by every test that needs a fresh customer."""
     phone = phone or _unique_phone()
     name = _unique_name(label)
-    child.expect("Customer search")
+    child.expect("Customer Search")
     child.sendline(name)
     # Wording differs depending on whether the search found any partial
     # matches ("+ Register a new customer") or none ("+ Register as a new
@@ -126,7 +128,7 @@ class TestHappyPath:
             customer_name = _new_customer_flow(child, "Buyer")
             child.expect("Was a discount applied to this sale\\?", timeout=20)
             child.sendline("no")
-            child.expect("Payment status:")
+            child.expect("Payment Status:")
             child.send(ENTER)  # Paid in full
             child.expect("Method of Payment:")
             child.send(ENTER)  # Cash
@@ -158,7 +160,7 @@ class TestHappyPath:
             customer_name = _new_customer_flow(child, "Partial Payer")
             child.expect("Was a discount applied to this sale\\?", timeout=20)
             child.sendline("no")
-            child.expect("Payment status:")
+            child.expect("Payment Status:")
             child.send(DOWN)
             child.send(ENTER)  # Partial payment
             child.expect("Amount Received")
@@ -196,7 +198,7 @@ class TestDiscountRemovalRecheck:
             customer_name = _new_customer_flow(child, "Discount Remover")
             child.expect("Was a discount applied to this sale\\?", timeout=20)
             child.sendline("yes")
-            child.expect("Discount percentage")
+            child.expect("Discount Percentage")
             child.sendline("10")
 
             text = expect_clean(child, "How would you like to proceed\\?")
@@ -235,7 +237,7 @@ class TestFullDiscountPaymentFix:
             customer_name = _new_customer_flow(child, "Comp Recipient")
             child.expect("Was a discount applied to this sale\\?", timeout=20)
             child.sendline("yes")
-            child.expect("Discount percentage")
+            child.expect("Discount Percentage")
             child.sendline("100")
 
             text = expect_clean(child, "How would you like to proceed\\?")
@@ -261,6 +263,8 @@ class TestStatusRejection:
         child = spawn_app()
         try:
             child.sendline("6")
+            child.expect("How many units are part of this sale")
+            child.sendline("")  # default 1
             child.expect("SKU:")
             child.sendline(unit["SKU"])
             text = expect_clean(child, "SKU:")
@@ -273,6 +277,8 @@ class TestStatusRejection:
         child = spawn_app()
         try:
             child.sendline("6")
+            child.expect("How many units are part of this sale")
+            child.sendline("")  # default 1
             child.expect("SKU:")
             child.sendline(unit["SKU"])
             text = expect_clean(child, "SKU:")
@@ -287,6 +293,8 @@ class TestBlankCostWarning:
         child = spawn_app()
         try:
             child.sendline("6")
+            child.expect("How many units are part of this sale")
+            child.sendline("")  # default 1
             child.expect("SKU:")
             child.sendline(unit["SKU"])
             text = expect_clean(child, "Is this the correct unit\\?")
@@ -304,7 +312,7 @@ class TestCancellation:
             customer_name = _new_customer_flow(child, "Sale Decliner")
             child.expect("Was a discount applied to this sale\\?", timeout=20)
             child.sendline("no")
-            child.expect("Payment status:")
+            child.expect("Payment Status:")
             child.send(ENTER)
             child.expect("Method of Payment:")
             child.send(ENTER)
@@ -317,3 +325,205 @@ class TestCancellation:
 
         unchanged = inv.get_row_by_sheet_index(inv.find_row_index_by_sku(unit["SKU"]))
         assert unchanged["Status"] == "Available"
+
+
+def _start_bulk_sale(child, batch_size):
+    child.sendline("6")
+    child.expect("How many units are part of this sale")
+    child.sendline(str(batch_size))
+    child.expect("Sales Channel:")
+    child.send(ENTER)  # Exhibition/Popup (default)
+
+
+def _enter_bulk_unit(child, sku, index, batch_size, skip=False):
+    """Drives one pass of _record_bulk_sale()'s per-unit loop: SKU entry,
+    the bulk-specific 'Is this the correct unit?' three-way select, no
+    discount, and 'Add this unit to the batch?'. skip=True exits via the
+    'Skip this unit' choice instead."""
+    expect_clean(child, f"SALE ENTRY \\({index} of {batch_size}\\)")
+    child.expect("SKU:")
+    child.sendline(sku)
+    expect_clean(child, "Is this the correct unit\\?")
+    if skip:
+        child.send(DOWN)
+        child.send(DOWN)
+        child.send(ENTER)  # "Skip this unit"
+        return
+    child.send(ENTER)  # "Yes, use this unit"
+    child.expect(f"Was a discount applied to {sku}\\?")
+    child.sendline("no")
+    child.expect("Add this unit to the batch\\?")
+    child.sendline("yes")
+
+
+class TestBulkSaleHappyPath:
+    def test_two_units_paid_in_full(self):
+        unit_a = fd.create_fresh_available_unit("BULK-SALE-FULL-A")
+        unit_b = fd.create_fresh_available_unit("BULK-SALE-FULL-B")
+        total_price = round(inv._sheet_float(unit_a["Selling Price (USD)"])
+                             + inv._sheet_float(unit_b["Selling Price (USD)"]), 2)
+
+        child = spawn_app(timeout=45)
+        try:
+            _start_bulk_sale(child, 2)
+            customer_name = _new_customer_flow(child, "Bulk Buyer")
+            _enter_bulk_unit(child, unit_a["SKU"], 1, 2)
+            _enter_bulk_unit(child, unit_b["SKU"], 2, 2)
+            child.expect("Date Sold")
+            child.sendline(TODAY_STR)
+            child.expect("paid in full\\?")
+            child.sendline("yes")
+            child.expect("Method of Payment:")
+            child.send(ENTER)
+
+            text = expect_clean(child, "Write this sale \\(2 units\\) to the master sheet\\?")
+            assert "BULK SALE SUMMARY" in text
+            assert unit_a["SKU"] in text
+            assert unit_b["SKU"] in text
+            child.sendline("yes")
+            text = expect_clean(child, "now has")  # follows the success line, so the
+            # buffer by this point already contains the full "sold to ...: SKU, SKU" line
+            assert unit_a["SKU"] in text and unit_b["SKU"] in text
+        finally:
+            close(child)
+
+        row_a = inv.get_row_by_sheet_index(inv.find_row_index_by_sku(unit_a["SKU"]))
+        row_b = inv.get_row_by_sheet_index(inv.find_row_index_by_sku(unit_b["SKU"]))
+        assert row_a["Status"] == "Sold"
+        assert row_b["Status"] == "Sold"
+        assert row_a["Customer Name"] == customer_name
+        assert row_b["Customer Name"] == customer_name
+        assert row_a["Date Sold"] == TODAY_STR
+        assert row_a["Amount Outstanding (USD)"] in ("", "0", 0)
+        assert row_b["Amount Outstanding (USD)"] in ("", "0", 0)
+
+    def test_uneven_prices_split_proportionally_not_evenly(self):
+        # The exact scenario that drove this design: a cheap unit and a
+        # pricier one in the same bulk sale. An even split would overpay
+        # the cheap unit relative to its price; proportional allocation
+        # must give each unit a share matching its own price ratio.
+        unit_cheap = fd.create_fresh_available_unit("BULK-SALE-UNEVEN-CHEAP")
+        unit_pricey = fd.create_fresh_available_unit("BULK-SALE-UNEVEN-PRICEY")
+        cheap_price = 100.0
+        pricey_price = 300.0
+        inv.update_row(inv.find_row_index_by_sku(unit_cheap["SKU"]), {
+            "Selling Price (USD)": cheap_price,
+        })
+        inv.update_row(inv.find_row_index_by_sku(unit_pricey["SKU"]), {
+            "Selling Price (USD)": pricey_price,
+        })
+        total_price = cheap_price + pricey_price
+        payment = 200.0  # 50% of the batch total
+
+        child = spawn_app(timeout=45)
+        try:
+            _start_bulk_sale(child, 2)
+            _new_customer_flow(child, "Uneven Buyer")
+            _enter_bulk_unit(child, unit_cheap["SKU"], 1, 2)
+            _enter_bulk_unit(child, unit_pricey["SKU"], 2, 2)
+            child.expect("Date Sold")
+            child.sendline(TODAY_STR)
+            child.expect("paid in full\\?")
+            child.sendline("no")
+            child.expect("Total Amount Received")
+            child.sendline(str(payment))
+            child.expect("Method of Payment:")
+            child.send(ENTER)
+
+            text = expect_clean(child, "Write this sale \\(2 units\\) to the master sheet\\?")
+            assert "Sold - Partial Payment" in text
+            child.sendline("yes")
+            expect_clean(child, "sold to")
+        finally:
+            close(child)
+
+        row_cheap = inv.get_row_by_sheet_index(inv.find_row_index_by_sku(unit_cheap["SKU"]))
+        row_pricey = inv.get_row_by_sheet_index(inv.find_row_index_by_sku(unit_pricey["SKU"]))
+        # 50% of the total paid -> each unit should carry exactly 50% of its
+        # own price as outstanding, not an equal dollar split (which would
+        # have left the cheap unit at $0 outstanding and the pricey one at
+        # $200 -- the exact failure mode this design replaced).
+        assert inv._sheet_float(row_cheap["Amount Received (USD)"]) == round(cheap_price * 0.5, 2)
+        assert inv._sheet_float(row_pricey["Amount Received (USD)"]) == round(pricey_price * 0.5, 2)
+        assert row_cheap["Status"] == "Sold - Partial Payment"
+        assert row_pricey["Status"] == "Sold - Partial Payment"
+
+
+class TestBulkSaleSkipAndCancel:
+    def test_skipping_a_unit_writes_only_the_rest(self):
+        unit_keep = fd.create_fresh_available_unit("BULK-SALE-SKIP-KEEP")
+        unit_skip = fd.create_fresh_available_unit("BULK-SALE-SKIP-DROP")
+
+        child = spawn_app(timeout=45)
+        try:
+            _start_bulk_sale(child, 2)
+            _new_customer_flow(child, "Skip Buyer")
+            _enter_bulk_unit(child, unit_keep["SKU"], 1, 2)
+            _enter_bulk_unit(child, unit_skip["SKU"], 2, 2, skip=True)
+            text = expect_clean(child, "Date Sold")
+            assert "skipped" in text.lower()
+            child.sendline(TODAY_STR)
+            child.expect("paid in full\\?")
+            child.sendline("yes")
+            child.expect("Method of Payment:")
+            child.send(ENTER)
+
+            text = expect_clean(child, "Write this sale \\(1 unit\\) to the master sheet\\?")
+            assert unit_skip["SKU"] not in text
+            child.sendline("yes")
+            expect_clean(child, "sold to")
+        finally:
+            close(child)
+
+        row_keep = inv.get_row_by_sheet_index(inv.find_row_index_by_sku(unit_keep["SKU"]))
+        row_skip = inv.get_row_by_sheet_index(inv.find_row_index_by_sku(unit_skip["SKU"]))
+        assert row_keep["Status"] == "Sold"
+        assert row_skip["Status"] == "Available"  # untouched
+
+    def test_skipping_every_unit_writes_nothing(self):
+        unit_a = fd.create_fresh_available_unit("BULK-SALE-ALLSKIP-A")
+        unit_b = fd.create_fresh_available_unit("BULK-SALE-ALLSKIP-B")
+
+        child = spawn_app(timeout=45)
+        try:
+            _start_bulk_sale(child, 2)
+            _new_customer_flow(child, "All Skip Buyer")
+            _enter_bulk_unit(child, unit_a["SKU"], 1, 2, skip=True)
+            _enter_bulk_unit(child, unit_b["SKU"], 2, 2, skip=True)
+            text = expect_clean(child, "Returning to Main Menu")
+            assert "No units were entered" in text
+        finally:
+            close(child)
+
+        row_a = inv.get_row_by_sheet_index(inv.find_row_index_by_sku(unit_a["SKU"]))
+        row_b = inv.get_row_by_sheet_index(inv.find_row_index_by_sku(unit_b["SKU"]))
+        assert row_a["Status"] == "Available"
+        assert row_b["Status"] == "Available"
+
+    def test_declining_final_confirmation_writes_nothing(self):
+        unit_a = fd.create_fresh_available_unit("BULK-SALE-DECLINE-A")
+        unit_b = fd.create_fresh_available_unit("BULK-SALE-DECLINE-B")
+
+        child = spawn_app(timeout=45)
+        try:
+            _start_bulk_sale(child, 2)
+            _new_customer_flow(child, "Bulk Decliner")
+            _enter_bulk_unit(child, unit_a["SKU"], 1, 2)
+            _enter_bulk_unit(child, unit_b["SKU"], 2, 2)
+            child.expect("Date Sold")
+            child.sendline(TODAY_STR)
+            child.expect("paid in full\\?")
+            child.sendline("yes")
+            child.expect("Method of Payment:")
+            child.send(ENTER)
+            child.expect("Write this sale \\(2 units\\) to the master sheet\\?")
+            child.sendline("no")
+            text = expect_clean(child, "Returning to Main Menu")
+            assert "Bulk sale cancelled" in text
+        finally:
+            close(child)
+
+        row_a = inv.get_row_by_sheet_index(inv.find_row_index_by_sku(unit_a["SKU"]))
+        row_b = inv.get_row_by_sheet_index(inv.find_row_index_by_sku(unit_b["SKU"]))
+        assert row_a["Status"] == "Available"
+        assert row_b["Status"] == "Available"
