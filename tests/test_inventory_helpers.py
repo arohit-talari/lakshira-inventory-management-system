@@ -428,6 +428,16 @@ class TestGetUnassignedSkusForCategory:
 # scenario that started this design: an uneven bulk purchase (one cheap unit,
 # several pricier ones) where a naive even split pays the cheap unit off
 # first as a pure artifact of the math, not a real allocation decision.
+#
+# A second real bug was found via UAT after the first version shipped: letting
+# whichever unit is positionally last absorb the whole rounding remainder in
+# one shot is unsafe -- with enough units, accumulated rounding drift from
+# every other share can exceed what a small last-balance unit can actually
+# absorb, silently under-allocating the batch by a few cents with no error.
+# Replaced with largest-remainder apportionment (round every share down,
+# then hand out the leftover pennies one at a time to whichever unit has the
+# largest fractional remainder and still has headroom). TestLargestRemainder
+# below covers that fix specifically.
 class TestAllocateProportionalPayment:
     def test_equal_balances_matches_even_split(self):
         shares = inv._allocate_proportional_payment(300.0, [100.0, 100.0, 100.0])
@@ -446,11 +456,14 @@ class TestAllocateProportionalPayment:
         shares = inv._allocate_proportional_payment(191.34, [123.45, 67.89])
         assert shares == [123.45, 67.89]
 
-    def test_rounding_remainder_absorbed_by_last_unit(self):
+    def test_rounding_remainder_distributed_by_largest_remainder(self):
         # 100 split three ways by 1/3 doesn't divide evenly into cents --
         # the total must still reconcile exactly to the entered payment.
+        # All three remainders tie exactly, so the extra cent goes to the
+        # lowest index (see TestLargestRemainder's tie-break tests), not
+        # whichever unit happens to be last.
         shares = inv._allocate_proportional_payment(100.0, [100.0, 100.0, 100.0])
-        assert shares == [33.33, 33.33, 33.34]
+        assert shares == [33.34, 33.33, 33.33]
         assert round(sum(shares), 2) == 100.0
 
     def test_ratio_preserved_after_a_payment_so_units_clear_together(self):
@@ -477,6 +490,55 @@ class TestAllocateProportionalPayment:
         # than it could possibly owe.
         shares = inv._allocate_proportional_payment(500.0, [100.0, 100.0])
         assert shares == [100.0, 100.0]
+
+
+# ── _allocate_proportional_payment: largest-remainder fix ──────────────────────
+# UAT question (2026-10-05): with a small-balance unit landing last and
+# enough other units to accumulate rounding drift, could the old "last unit
+# absorbs the whole remainder" approach exceed that unit's own balance or
+# silently fall short of the entered payment? Confirmed yes -- reproduced
+# directly against the then-current function before the fix below existed.
+class TestLargestRemainder:
+    def test_four_unit_case_that_used_to_fall_a_cent_short(self):
+        # Reproduced via adversarial search: under the old "last unit
+        # absorbs" approach, this exact input returned shares summing to
+        # $933.83 against a $933.84 payment -- a real, silent one-cent
+        # shortfall, no error raised. The fix must reconcile exactly.
+        balances = [293.21, 265.07, 375.52, 0.13]
+        payment = 933.84
+        shares = inv._allocate_proportional_payment(payment, balances)
+        assert round(sum(shares), 2) == payment
+        assert all(s <= b for s, b in zip(shares, balances))
+        assert shares[3] == 0.13  # the tiny unit still clears in full
+
+    def test_many_units_never_fall_short_or_exceed_a_balance(self):
+        # Adversarial, not just spot-checked: many units, a small balance
+        # placed last, payment deliberately just under full payoff -- the
+        # exact shape that broke the old implementation.
+        import random
+        rng = random.Random(1)
+        for _ in range(500):
+            n = rng.randint(3, 25)
+            big = [round(rng.uniform(1, 500), 2) for _ in range(n - 1)]
+            tiny = round(rng.uniform(0.01, 0.5), 2)
+            balances = big + [tiny]
+            total = round(sum(balances), 2)
+            payment = round(total - rng.uniform(0.001, tiny), 2)
+            shares = inv._allocate_proportional_payment(payment, balances)
+            assert round(sum(shares), 2) == payment
+            assert all(s <= b + 1e-9 for s, b in zip(shares, balances))
+
+    def test_tied_remainder_breaks_to_lower_index_deterministically(self):
+        # Three equal balances splitting a payment that doesn't divide
+        # evenly three ways produces an exact three-way tie on the
+        # fractional remainder -- Python's stable sort (not a dict/set
+        # anywhere in this function, so no PYTHONHASHSEED exposure) means
+        # the tie always resolves to the lowest index, every run.
+        balances = [50.0, 50.0, 50.0]
+        payment = 100.0
+        for _ in range(5):
+            shares = inv._allocate_proportional_payment(payment, balances)
+            assert shares == [33.34, 33.33, 33.33]
 
 
 # ── bulk write-intent log ────────────────────────────────────────────────────────

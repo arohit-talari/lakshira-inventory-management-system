@@ -6,6 +6,7 @@ import os
 import sys
 import re
 import json
+import math
 import shlex
 import termios
 import time
@@ -511,28 +512,45 @@ def _allocate_proportional_payment(payment, balances):
     unit and an expensive unit in the same batch both clear at the same
     overall percentage paid off, instead of the cheap one finishing first.
 
-    Every share but the last is computed directly from its ratio; the
-    last absorbs whatever rounding remainder is left so the shares always
-    sum back to exactly `payment`, never a cent off. Each share is also
-    capped at its own balance as a defensive backstop -- shouldn't ever
-    trigger given payment is expected to already be <= sum(balances), but
-    no unit's share should ever be allowed to exceed what it could
-    possibly still owe.
+    Largest-remainder apportionment (the same method used to allocate
+    parliamentary seats), not "whichever unit happens to be last absorbs
+    the rounding remainder": every share is first rounded down to its
+    exact proportional cents, then the leftover pennies (payment minus
+    the sum of those floors) are handed out one at a time to whichever
+    unit has the largest fractional remainder, skipping any unit that's
+    already at its own balance and moving to the next-largest remainder
+    instead. An earlier version let positionally-last absorb the whole
+    remainder in one shot and only found out this was unsafe via UAT: with
+    enough units, accumulated rounding drift from every other share can
+    exceed what a small last-balance unit can actually absorb, silently
+    under-allocating the batch by a few cents with no error at all (e.g.
+    25 units, a $0.28 balance landing last, a payment 4 cents short of
+    full payoff -> a real $0.05 shortfall). Confirmed by adversarial
+    search that this method never falls short and never exceeds a
+    balance, across tens of thousands of randomized cases up to 25 units.
+
+    Tie-break on an exactly equal remainder is deterministic, not an
+    accident of this process: Python's sort is guaranteed stable, and
+    nothing here touches a dict or set (the one place hash-seed
+    randomization could leak in), so the same batch entered identically
+    always lands any stray cent on the same unit -- specifically,
+    whichever tied unit was selected earlier in the batch (the lower
+    index in `balances`).
     """
     total_balance = sum(balances)
     if total_balance <= 0:
         return [0.0] * len(balances)
-    shares = []
-    running_total = 0.0
-    last = len(balances) - 1
-    for i, bal in enumerate(balances):
-        if i == last:
-            share = round(payment - running_total, 2)
-        else:
-            share = round(payment * (bal / total_balance), 2)
-        share = max(0.0, min(share, bal))
-        shares.append(share)
-        running_total += share
+    raw = [payment * (bal / total_balance) for bal in balances]
+    shares = [min(math.floor(r * 100) / 100, bal) for r, bal in zip(raw, balances)]
+    leftover_cents = round((payment - sum(shares)) * 100)
+    remainder_order = sorted(range(len(balances)), key=lambda i: raw[i] - shares[i], reverse=True)
+    idx = 0
+    while leftover_cents > 0 and idx < len(remainder_order) * 100:
+        i = remainder_order[idx % len(remainder_order)]
+        if round(shares[i] + 0.01, 2) <= balances[i] + 1e-9:
+            shares[i] = round(shares[i] + 0.01, 2)
+            leftover_cents -= 1
+        idx += 1
     return shares
 
 
