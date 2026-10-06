@@ -3334,7 +3334,7 @@ def _add_single_unit():
         ecb_rate, rate_date_str = fetch_ecb_rate(date_acquired_str)
         if rate_date_str == "abort":
             print("\nCould not fetch the exchange rate.")
-            if not ask_yes_no("Retry the lookup? (Everything you've entered so far is still saved.)"):
+            if not ask_yes_no("Retry the lookup? (Everything you've entered so far is still saved)"):
                 print("Returning to Main Menu.")
                 return
             continue
@@ -3542,7 +3542,7 @@ def _add_bulk_units(batch_size):
         ecb_rate, rate_date_str = fetch_ecb_rate(date_acquired_str)
         if rate_date_str == "abort":
             print("\nCould not fetch the exchange rate.")
-            if not ask_yes_no("Retry the lookup? (Everything you've entered so far is still saved.)"):
+            if not ask_yes_no("Retry the lookup? (Everything you've entered so far is still saved)"):
                 print("Returning to Main Menu.")
                 return
             continue
@@ -5321,7 +5321,7 @@ def edit_inventory_details():
                         print("\nThis edit was not applied.")
                         return False
                     print("\nCould not fetch the exchange rate.")
-                    if not ask_yes_no("Retry the lookup? (Values you've already entered are still saved.)"):
+                    if not ask_yes_no("Retry the lookup? (Values you've already entered are still saved)"):
                         print("This edit was not applied.")
                         return False
 
@@ -5946,7 +5946,7 @@ def discount_simulator():
                     if status != "abort":
                         break
                     print("\nCould not fetch the exchange rate.")
-                    if not ask_yes_no("Retry the lookup? (Your entered Total Cost is still saved.)"):
+                    if not ask_yes_no("Retry the lookup? (Your entered Total Cost is still saved)"):
                         print("Returning to Main Menu.")
                         return
 
