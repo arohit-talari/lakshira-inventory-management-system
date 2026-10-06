@@ -23,7 +23,7 @@ flowchart LR
 |---|---|
 | **`docs/`** | Write-ups and diagrams: how the system works, how its requirements were gathered, and the schema it's built on |
 | **`inventory_management_system/`** | Houses the system itself: its code, the fonts and logo used in generated reports, and a settings template |
-| **`tests/`** | 236 automated checks that confirm the system still works correctly every time something changes |
+| **`tests/`** | 290 automated checks that confirm the system still works correctly every time something changes |
 | **`requirements.txt`** | External tools the system needs installed to run |
 | **`pytest.ini`** | Configuration for running the automated tests |
 | **`.gitignore`** | Tells Git which files, like passwords and credentials, should never be uploaded |
@@ -122,7 +122,7 @@ The data and analytics foundation still left a gap: the owner, already juggling 
 | | |
 |---|---|
 | **Operations** | 11, covering the full inventory-to-sale-to-reporting lifecycle plus AI-assisted marketing content |
-| **Quality Assurance** | 390 defects resolved via structured User Acceptance Testing (UAT), backed by a 236-test automated regression suite |
+| **Quality Assurance** | 395 defects resolved via structured User Acceptance Testing (UAT), backed by a 290-test automated regression suite |
 | **Built with** | Python, directed through Claude Code |
 | **Impact** | Removed day-to-day dependence on the analyst for pricing and discount decisions, replacing ad hoc requests with self-serve tools grounded in real margin thresholds |
 

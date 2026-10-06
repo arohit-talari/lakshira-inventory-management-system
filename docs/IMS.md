@@ -45,11 +45,11 @@ Every write operation follows the same guided shape: look up → validate status
 
 ## Validation and Testing
 
-Before this system could go live and be trusted with real customer and financial data, it had to be rigorously tested to ensure it solved the business's core problem. Architecting and designing all the operations and business logic the system would depend on wasn't the bar. Validation was run through a structured UAT (User Acceptance Testing) process, which surfaced 390 defects against business workflows and stakeholder-observed scenarios, each classified by business risk rather than technical severity (23 assessed as Critical), and each traced back to a specific requirement or a specific gap in how the manual process previously worked. That process is what transformed a working script that could theoretically handle the business's workflows into a system the stakeholder could actually depend on for day-to-day operations.
+Before this system could go live and be trusted with real customer and financial data, it had to be rigorously tested to ensure it solved the business's core problem. Architecting and designing all the operations and business logic the system would depend on wasn't the bar. Validation was run through a structured UAT (User Acceptance Testing) process, which surfaced 395 defects against business workflows and stakeholder-observed scenarios, each classified by business risk rather than technical severity (24 assessed as Critical), and each traced back to a specific requirement or a specific gap in how the manual process previously worked. That process is what transformed a working script that could theoretically handle the business's workflows into a system the stakeholder could actually depend on for day-to-day operations.
 
-**A two-tier, 236-test automated regression suite locks each resolved defect in place:**
-- **147 tests** validating core business logic (pricing calculations, date/aging rules, report metrics) in isolation
-- **89 tests** driving the full guided workflow end-to-end against a live test environment, covering all 11 operations: correct-path completion, appropriate rejection of invalid states, validation-error handling, and cancellation paths
+**A two-tier, 290-test automated regression suite locks each resolved defect in place:**
+- **165 tests** validating core business logic (pricing calculations, date/aging rules, report metrics) in isolation
+- **125 tests** driving the full guided workflow end-to-end against a live test environment, covering all 11 operations: correct-path completion, appropriate rejection of invalid states, validation-error handling, and cancellation paths
 
 That validation effort covered four distinct kinds of ground:
 - **Functional**: every operation's core workflow, verified against data state after each write
@@ -71,7 +71,7 @@ One specific risk that discipline caught: because more than one person can act o
 The validation effort above was run as a structured DMAIC (Define, Measure, Analyze, Improve, Control) cycle, closing the gap between the manual process and the delivered system:
 
 - **Define**: the manual, hand-edited workbook was the source of the defects being eliminated: no validation, no audit trail, silent data-entry errors, no repeatable reporting process.
-- **Measure**: 390 defects identified and prioritized by business risk (23 Critical), against a 236-test suite establishing a repeatable baseline instead of ad hoc spot-checks.
+- **Measure**: 395 defects identified and prioritized by business risk (24 Critical), against a 290-test suite establishing a repeatable baseline instead of ad hoc spot-checks.
 - **Analyze**: every defect was root-caused against the actual business workflow it broke, never just patched at the symptom. A reporting mismatch, for example, was traced back to specific incomplete source records rather than written off as noise.
 - **Improve**: each defect resolved at its root cause, with the underlying process changed so the same class of issue can't recur. Fixing the immediate instance alone wasn't the goal.
 - **Control**: every fix locked behind a permanent regression test, re-run before any future change, functioning as the control mechanism in place of a physical control chart.
@@ -125,7 +125,7 @@ inventory_management_system/
   scheduler.py             # automated report scheduling (macOS launchd)
   assets/                  # fonts and logo used by generated PDF reports
   .env.example             # template for the .env this system reads at runtime
-tests/                     # 236 tests across both tiers
+tests/                     # 290 tests across both tiers
 docs/
   ARCHITECTURE.md          # data model, SKU logic, currency handling, per-operation detail
   STAKEHOLDER_DISCOVERY.md # the requirements-gathering framework that shaped every decision above
