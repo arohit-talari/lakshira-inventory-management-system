@@ -4604,7 +4604,6 @@ def _record_bulk_sale(batch_size):
     # each unit's resulting status falls out of the allocation, not a
     # batch-wide toggle.
     total_price = round(sum(u["actual_selling_price_usd"] for u in units), 2)
-    print()
     paid_in_full = ask_yes_no(f"Was this purchase (${total_price:,.2f} total) paid in full?")
     if paid_in_full:
         amount_received_total = total_price
@@ -4659,7 +4658,7 @@ def _record_bulk_sale(batch_size):
         ]),
     ])
 
-    confirmed = ask_yes_no(f"\nWrite this sale ({len(units)} unit{'s' if len(units) != 1 else ''}) to the master sheet?")
+    confirmed = ask_yes_no(f"Write this sale ({len(units)} unit{'s' if len(units) != 1 else ''}) to the master sheet?")
     if not confirmed:
         print("\nBulk sale cancelled. Nothing was written. Returning to Main Menu.")
         return
@@ -6272,11 +6271,21 @@ def record_outstanding_payment():
                     # them, she may separately owe on an unrelated
                     # purchase). Checking just one box behaves exactly like
                     # the single-unit path above. See
-                    # docs/Bulk_Payment_Scoping_Op6_Op7.md §8.1 -- the
-                    # instruction line is left as questionary's own default
-                    # ("space to select...") rather than suppressed like
-                    # every select() above, since toggling a checkbox is an
-                    # interaction nothing else in this tool has taught yet.
+                    # docs/Bulk_Payment_Scoping_Op6_Op7.md §8.1 -- UAT
+                    # (TC-382, 2026-10-05) found questionary's own default
+                    # instruction ("space to select...") insufficient alone
+                    # on first exposure: every other prompt in this tool is
+                    # select-then-Enter, so an operator trained by every
+                    # other screen can plausibly hit Enter without ever
+                    # touching space and land in the single-unit path without
+                    # realizing multi-select was even available. The fix
+                    # replaces that default via questionary's own
+                    # instruction= parameter (not raw ANSI folded into
+                    # qmark -- qmark is rendered as one literal
+                    # "class:qmark" token, so embedded escape codes show up
+                    # as literal text rather than styling; instruction= goes
+                    # through questionary's own "class:instruction" token
+                    # and renders correctly).
                     choices = [
                         questionary.Choice(
                             title=f"{r.get('SKU', '').strip():<16}${_sheet_float(r.get('Amount Outstanding (USD)')):,.2f} outstanding",
@@ -6288,6 +6297,7 @@ def record_outstanding_payment():
                         "",
                         choices=choices,
                         qmark=f"\nOutstanding units for {selected_customer['name']}:",
+                        instruction="(Check one or more units, then press Enter)",
                         style=_MENU_STYLE,
                     ).unsafe_ask()
                     if not chosen_skus:
@@ -6502,8 +6512,8 @@ def _process_single_outstanding_payment(selected_row):
     updated_notes = _fresh_notes_append(sheet_row, "Transaction Notes", [note_append])
 
     update_row(sheet_row, {
-        "Amount Received (USD)": "" if new_status == "Sold" else new_received,
-        "Amount Outstanding (USD)": "" if new_status == "Sold" else new_outstanding,
+        "Amount Received (USD)": new_received,
+        "Amount Outstanding (USD)": new_outstanding,
         "Status": new_status,
         "Transaction Notes": updated_notes,
     })
@@ -6600,7 +6610,7 @@ def _process_bulk_outstanding_payment(selected_rows):
     _allocate(units, payment)
     _show_bulk_summary(units, payment)
 
-    if not ask_yes_no(f"\nWrite this payment ({len(units)} units) to the master sheet?"):
+    if not ask_yes_no(f"Write this payment ({len(units)} units) to the master sheet?"):
         print("\nBulk payment cancelled. Nothing was written. Returning to Main Menu.")
         return False
 
@@ -6615,6 +6625,7 @@ def _process_bulk_outstanding_payment(selected_rows):
     # against the refreshed balances and re-confirmed before writing, since
     # one unit's balance changing shifts what's fair for every other unit
     # in the same batch too.
+    resolved_restore_skus = set()
     while True:
         for u in units:
             if not _status_unchanged(u["row_index"], u["current_status"]):
@@ -6625,6 +6636,13 @@ def _process_bulk_outstanding_payment(selected_rows):
 
         conflicts = []
         for u in units:
+            if u["sku"] in resolved_restore_skus:
+                # Already resolved as "restore" in an earlier round -- the
+                # sheet still (correctly) shows its stale value, since that
+                # restoration is only ever written at the very end. Re-
+                # comparing it here would just detect the same discrepancy
+                # we already resolved and re-prompt for it forever.
+                continue
             fresh_outstanding = _sheet_float(get_row_by_sheet_index(u["row_index"]).get("Amount Outstanding (USD)"))
             if round(fresh_outstanding, 2) != round(u["outstanding"], 2):
                 conflicts.append((u, fresh_outstanding))
@@ -6642,9 +6660,11 @@ def _process_bulk_outstanding_payment(selected_rows):
                 u["outstanding"] = fresh_outstanding
                 u["received"] = _sheet_float(get_row_by_sheet_index(u["row_index"]).get("Amount Received (USD)"))
                 any_use_current = True
-            # "restore": leave u["outstanding"] as the original baseline --
-            # the allocation already computed from it is still correct, and
-            # writing it back is itself the restoration.
+            else:
+                # "restore": leave u["outstanding"] as the original baseline
+                # -- the allocation already computed from it is still
+                # correct, and writing it back is itself the restoration.
+                resolved_restore_skus.add(u["sku"])
 
         if any_use_current:
             new_total_outstanding = round(sum(u["outstanding"] for u in units), 2)
@@ -6663,10 +6683,21 @@ def _process_bulk_outstanding_payment(selected_rows):
                         payment = None
             _allocate(units, payment)
             _show_bulk_summary(units, payment)
-            if not ask_yes_no(f"\nWrite this payment ({len(units)} units) to the master sheet?"):
+            if not ask_yes_no(f"Write this payment ({len(units)} units) to the master sheet?"):
                 print("\nBulk payment cancelled. Nothing was written. Returning to Main Menu.")
                 return False
-        # loop again -- re-verify against the sheet once more before writing
+            # loop again -- re-verify against the sheet once more before
+            # writing, in case yet another change landed while this was
+            # being resolved
+        else:
+            # Every conflict resolved as "restore" -- nothing on the sheet
+            # actually changed (the eventual write below is itself the
+            # restoration), so re-checking again here would just detect
+            # the exact same already-resolved discrepancy and re-prompt
+            # for it forever. Proceed straight to the write, matching
+            # _process_single_outstanding_payment()'s identical break for
+            # its own "restore" case.
+            break
 
     _write_batch_intent_log(
         "record_outstanding_payment_bulk",
@@ -6692,8 +6723,8 @@ def _process_bulk_outstanding_payment(selected_rows):
                 )
             updated_notes = _fresh_notes_append(u["row_index"], "Transaction Notes", [note_append])
             update_row(u["row_index"], {
-                "Amount Received (USD)": "" if u["new_status"] == "Sold" else u["new_received"],
-                "Amount Outstanding (USD)": "" if u["new_status"] == "Sold" else u["new_outstanding"],
+                "Amount Received (USD)": u["new_received"],
+                "Amount Outstanding (USD)": u["new_outstanding"],
                 "Status": u["new_status"],
                 "Transaction Notes": updated_notes,
             })
