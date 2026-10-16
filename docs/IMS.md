@@ -27,7 +27,7 @@ The IMS closes both gaps directly: it hardcodes the reference tables into real p
 
 This is the operational-system stage's own stack. The data warehouse (MySQL/AWS RDS) and BI layer (Tableau) that this system feeds are covered in the main [README](../README.md), not duplicated here.
 
-## The Eleven Operations
+## The Twelve Operations
 
 1. **Add Inventory**
 2. **Edit Inventory Details**
@@ -37,19 +37,20 @@ This is the operational-system stage's own stack. The data warehouse (MySQL/AWS 
 6. **Record a Sale**
 7. **Record an Outstanding Payment**
 8. **Cancel a Sale**
-9. **View Customer Insights**
-10. **Generate Report**
-11. **Generate Product Description**
+9. **Manage Expenses**
+10. **View Customer Insights**
+11. **Generate Report**
+12. **Generate Product Description**
 
-Every write operation follows the same guided shape: look up → validate status/eligibility → collect fields one at a time → show a full confirmation summary → require explicit confirmation → write → confirm success. Errors surface in plain English at the point of entry, not after the fact. Generate Product Description follows this same discipline at its write step, though reaching that confirmation is richer than it is for the other 10 operations, since it's producing a draft to react to, not a fixed set of values. See [Architecture](ARCHITECTURE.md) for the data model, SKU generation logic, currency handling, and per-operation detail.
+Every write operation follows the same guided shape: look up → validate status/eligibility → collect fields one at a time → show a full confirmation summary → require explicit confirmation → write → confirm success. Errors surface in plain English at the point of entry, not after the fact. Generate Product Description follows this same discipline at its write step, though reaching that confirmation is richer than it is for the other 11 operations, since it's producing a draft to react to, not a fixed set of values. See [Architecture](ARCHITECTURE.md) for the data model, SKU generation logic, currency handling, and per-operation detail.
 
 ## Validation and Testing
 
-Before this system could go live and be trusted with real customer and financial data, it had to be rigorously tested to ensure it solved the business's core problem. Architecting and designing all the operations and business logic the system would depend on wasn't the bar. Validation was run through a structured UAT (User Acceptance Testing) process, which surfaced 395 defects against business workflows and stakeholder-observed scenarios, each classified by business risk rather than technical severity (24 assessed as Critical), and each traced back to a specific requirement or a specific gap in how the manual process previously worked. That process is what transformed a working script that could theoretically handle the business's workflows into a system the stakeholder could actually depend on for day-to-day operations.
+Before this system could go live and be trusted with real customer and financial data, it had to be rigorously tested to ensure it solved the business's core problem. Architecting and designing all the operations and business logic the system would depend on wasn't the bar. Validation was run through a structured UAT (User Acceptance Testing) process, which surfaced 430 defects against business workflows and stakeholder-observed scenarios, each classified by business risk rather than technical severity (24 assessed as Critical), and each traced back to a specific requirement or a specific gap in how the manual process previously worked. That process is what transformed a working script that could theoretically handle the business's workflows into a system the stakeholder could actually depend on for day-to-day operations.
 
-**A two-tier, 290-test automated regression suite locks each resolved defect in place:**
-- **165 tests** validating core business logic (pricing calculations, date/aging rules, report metrics) in isolation
-- **125 tests** driving the full guided workflow end-to-end against a live test environment, covering all 11 operations: correct-path completion, appropriate rejection of invalid states, validation-error handling, and cancellation paths
+**A two-tier, 322-test automated regression suite locks each resolved defect in place:**
+- **185 tests** validating core business logic (pricing calculations, date/aging rules, report metrics) in isolation
+- **137 tests** driving the full guided workflow end-to-end against a live test environment, covering all 12 operations: correct-path completion, appropriate rejection of invalid states, validation-error handling, and cancellation paths
 
 That validation effort covered four distinct kinds of ground:
 - **Functional**: every operation's core workflow, verified against data state after each write
@@ -71,7 +72,7 @@ One specific risk that discipline caught: because more than one person can act o
 The validation effort above was run as a structured DMAIC (Define, Measure, Analyze, Improve, Control) cycle, closing the gap between the manual process and the delivered system:
 
 - **Define**: the manual, hand-edited workbook was the source of the defects being eliminated: no validation, no audit trail, silent data-entry errors, no repeatable reporting process.
-- **Measure**: 395 defects identified and prioritized by business risk (24 Critical), against a 290-test suite establishing a repeatable baseline instead of ad hoc spot-checks.
+- **Measure**: 430 defects identified and prioritized by business risk (24 Critical), against a 322-test suite establishing a repeatable baseline instead of ad hoc spot-checks.
 - **Analyze**: every defect was root-caused against the actual business workflow it broke, never just patched at the symptom. A reporting mismatch, for example, was traced back to specific incomplete source records rather than written off as noise.
 - **Improve**: each defect resolved at its root cause, with the underlying process changed so the same class of issue can't recur. Fixing the immediate instance alone wasn't the goal.
 - **Control**: every fix locked behind a permanent regression test, re-run before any future change, functioning as the control mechanism in place of a physical control chart.
@@ -79,7 +80,7 @@ The validation effort above was run as a structured DMAIC (Define, Measure, Anal
 **Specific Lean Six Sigma tools applied here, beyond DMAIC as a label:**
 
 - **Poka-yoke (mistake-proofing)**: every constrained business field (status, category, weave type, sales channel) is a validated pick-list, never free text. An entire class of data-entry defect is made structurally impossible, no longer just discouraged.
-- **Standardized work**: all 11 operations follow the same look up → validate → collect → confirm → write discipline at the write step, so the system behaves predictably for a non-technical user regardless of which task they're performing.
+- **Standardized work**: all 12 operations follow the same look up → validate → collect → confirm → write discipline at the write step, so the system behaves predictably for a non-technical user regardless of which task they're performing.
 - **Waste elimination (Muda)**: manual cross-referencing and calculation (motion/waiting waste) replaced by automation; recurring data-entry defects (defect waste) prevented at the point of entry; a report that once required manually compiling numbers across tabs now generates on demand.
 - **Kaizen (continuous improvement)**: the system evolved across the engagement through a repeated structure: audit → fix → validate, rather than one large rewrite.
 
@@ -118,14 +119,14 @@ pytest tests/test_interactive_*.py -v -s                        # Tier 2 -- need
 
 ```
 inventory_management_system/
-  inventory.py             # the CLI -- all 11 operations
+  inventory.py             # the CLI -- all 12 operations
   description_generator.py # Claude API conversation, prompt construction, and Drive photo upload
   generate_report.py       # PDF report generation + structured executive summary via the Claude API
   report_config.py         # reporting configuration (fonts, brand colors, secrets loading)
   scheduler.py             # automated report scheduling (macOS launchd)
   assets/                  # fonts and logo used by generated PDF reports
   .env.example             # template for the .env this system reads at runtime
-tests/                     # 290 tests across both tiers
+tests/                     # 322 tests across both tiers
 docs/
   ARCHITECTURE.md          # data model, SKU logic, currency handling, per-operation detail
   STAKEHOLDER_DISCOVERY.md # the requirements-gathering framework that shaped every decision above

@@ -55,7 +55,7 @@ Two pricing paths, user's choice:
 
 Either path recalculates Gross Profit, Markup %, and Margin % automatically, and warns (without blocking) if the result falls below a configured margin threshold. A low-margin sale is sometimes the right call, but it should never happen by accident.
 
-## 6. The Eleven Operations
+## 6. The Twelve Operations
 
 1. **Add Inventory**: new SKU, cost and pricing entry, ECB-rate-derived cost basis
 2. **Edit Inventory Details**: amend an existing unit's fields, with cost-field edits triggering a full pricing recalculation
@@ -65,11 +65,12 @@ Either path recalculates Gross Profit, Markup %, and Margin % automatically, and
 6. **Record a Sale**: the most complex flow, customer capture and matching, discount handling, payment status, below-cost gating
 7. **Record an Outstanding Payment**: apply a payment against a partially-paid sale, track running balance
 8. **Cancel a Sale**: reverse a sale, restore the unit to `Available`, track any pending refund
-9. **View Customer Insights**: lifetime and period-scoped purchase history, spend, and outstanding balance per customer
-10. **Generate Report**: a full PDF business-intelligence report spanning financial performance, customer and sales behavior, and inventory and supply-chain health, capped with a structured Claude API executive summary and targeted recommendations, plus optional email delivery
-11. **Generate Product Description**: a multi-turn Claude API conversation generates descriptions across the business's sales channels, grounded in the business's own brand voice and per-unit detail, with a sibling-sync mechanism that keeps a unit's other channel descriptions consistent with a corrected fact.
+9. **Manage Expenses**: log Operating Expenses and Capital Expenditures, individually or as a recurring series, with a self-growing subcategory taxonomy and an automatic sweep surfacing overdue recurring entries every time the operation opens
+10. **View Customer Insights**: lifetime and period-scoped purchase history, spend, and outstanding balance per customer
+11. **Generate Report**: a full PDF business-intelligence report spanning financial performance, customer and sales behavior, and inventory and supply-chain health, capped with a structured Claude API executive summary and targeted recommendations, plus optional email delivery
+12. **Generate Product Description**: a multi-turn Claude API conversation generates descriptions across the business's sales channels, grounded in the business's own brand voice and per-unit detail, with a sibling-sync mechanism that keeps a unit's other channel descriptions consistent with a corrected fact.
 
-Every write operation follows the same core shape: look up, validate status/eligibility, collect fields one at a time, show a full confirmation summary, require explicit confirmation, write, confirm success. Nothing is written to the sheet without that final confirmation step. Generate Product Description follows this same discipline at its write step, though reaching that confirmation is richer than it is for the other 10 operations, since it's producing a draft to react to, not a fixed set of values to enter.
+Every write operation follows the same core shape: look up, validate status/eligibility, collect fields one at a time, show a full confirmation summary, require explicit confirmation, write, confirm success. Nothing is written to the sheet without that final confirmation step. Generate Product Description follows this same discipline at its write step, though reaching that confirmation is richer than it is for the other 11 operations, since it's producing a draft to react to, not a fixed set of values to enter.
 
 ## 7. Concurrency Safety
 
