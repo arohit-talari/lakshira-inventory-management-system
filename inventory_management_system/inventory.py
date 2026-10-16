@@ -8,6 +8,7 @@ import re
 import json
 import math
 import shlex
+import shutil
 import termios
 import time
 import difflib
@@ -19,7 +20,7 @@ import readline  # noqa: F401 -- unused directly, but importing it switches ever
 
 import requests
 import questionary
-from prompt_toolkit.styles import Style
+from prompt_toolkit.styles import Style, merge_styles
 import phonenumbers
 from phonenumbers import phonemetadata as _phonemetadata
 from datetime import datetime, date
@@ -44,6 +45,46 @@ SHEET_IDS = {
 # option, so this stays a fixed floor rather than a value derived from
 # sheet data.
 BUSINESS_START_YEAR = 2022
+
+# Minimum length an EXISTING name needs before it's allowed to match via the
+# "existing name is contained inside what was just typed" direction of a
+# bidirectional substring dedup check (suppliers, weave types, garment
+# types, expense subcategories). Without this floor, a short existing
+# entry (e.g. a supplier called "Sri") would be found "inside" almost any
+# unrelated longer input ("Srinivasa Textiles"), producing a false "did you
+# mean" prompt. The other direction -- a short typed query matching a
+# longer existing name -- is unaffected and stays uncapped, since that's
+# the useful case (typing "Krishna" to find "V. Krishnamoorthy"), not the
+# risky one. No entry in any of these lists is anywhere close to this
+# short today; this is a guardrail against a future short entry, not a fix
+# for a live problem.
+_MIN_DEDUP_MATCH_LEN = 4
+
+# Cap on how many rows any single Manage Expenses list renders in one
+# arrow-key menu -- the Edit lookup's blank-query recent-browse and text
+# search, and the subcategory picker's own search once a category's list
+# grows past this. Without this, a broad search term (e.g. "ad") against a
+# real-sized log can return far more matches than a terminal viewport can
+# show at once -- questionary.select() has no built-in pagination, so an
+# uncapped list just overflows the screen with no indication anything is
+# below the fold, silently pushing "Search again"/"Back" off-screen
+# entirely (UAT finding, Section 12 -- confirmed via a real PTY capture of
+# a 40-row synthetic match set in a 30-row terminal before this cap was
+# added). Also doubles as the threshold for whether the subcategory
+# picker bothers showing a search step at all.
+_EXPENSE_SEARCH_RESULT_CAP = 20
+
+# Category/Subcategory clip width in the expense-edit lookup's aligned list
+# is computed from the real terminal width (shutil.get_terminal_size()) at
+# render time, not a flat guess -- a fixed guess (24, tried first) still
+# overflowed on a genuinely narrow terminal while wasting space on a wide
+# one. These bound that computation: a sane default when stdout isn't a
+# real TTY (shutil's own fallback is 80, a 1970s-hardware assumption; 100
+# matches what this app's actual terminal screenshots have shown), and a
+# floor so an extremely narrow terminal never collapses a column to
+# something unreadable (UAT finding, Section 12).
+_EXPENSE_LIST_FALLBACK_TERM_WIDTH = 100
+_EXPENSE_LIST_MIN_FIELD_WIDTH = 10
 
 # =============================================================================
 # REFERENCE DATA
@@ -98,10 +139,6 @@ WEAVE_GARMENT_TYPES = {name: _infer_garment_type(name) for name in WEAVE_TYPES}
 
 GARMENT_TYPES = []  # populated at startup from Category Code tab column D; extended this session when new types are added
 
-# Sample values -- real supplier relationships are business-confidential and
-# not published here. This is a seed list of the same shape/size as the
-# production data (18 suppliers), swappable via load_suppliers() below,
-# which also learns any new supplier typed into the live sheet at runtime.
 SUPPLIERS = [
     "Anand Weaves",
     "Sundari Silks",
@@ -905,6 +942,7 @@ def ask_yes_no(prompt):
 _MENU_STYLE = Style.from_dict({
     "back-option":      "#777777",
     "register-option":  "#5fafff",
+    "choice-label":     "bold",
     # questionary's own message template is " {} ".format(message) -- always
     # a leading space, with no public setting to remove it, unlike qmark,
     # which has no forced padding at all. Every menu in this file put its
@@ -923,6 +961,18 @@ _MENU_STYLE = Style.from_dict({
     # ask_long_text()'s label class earlier in this file.
     "qmark":            "fg:default bold",
 })
+
+# A Separator always renders through the single "class:separator" style
+# token (confirmed live: raw ANSI embedded in its title string renders as
+# literal escape-character garbage, not formatting -- styling has to go
+# through the style-class mechanism instead). _MENU_STYLE leaves
+# "separator" undefined, so column-header Separators (the Edit-lookup's
+# expense list) were rendering with no visual distinction from the actual
+# choices below them -- confirmed directly from a screenshot. Composed as
+# a merge onto _MENU_STYLE, not a change to it, so this stays scoped to
+# the one list that needs it rather than restyling every plain "---"
+# divider elsewhere in the file that also goes through "class:separator".
+_EXPENSE_LIST_HEADER_STYLE = merge_styles([_MENU_STYLE, Style.from_dict({"separator": "bold"})])
 
 def _back_choice(text="Back"):
     return questionary.Choice(title=[("class:back-option", f"← {text}")], value=text)
@@ -1325,7 +1375,7 @@ def resolve_sku(category_code, weave_type, batch_reserved_skus=None):
         if chosen_sku != "Generate a new SKU" and chosen_sku is not None:
             chosen_existing_row = find_row_index_by_sku(chosen_sku)
             sku = chosen_sku
-            print(f"\n\033[1mYou have selected:\033[0m {sku}")
+            print(f"\n\033[1mYou have selected:\033[0m \033[38;5;214;1m{sku}\033[0m")
             confirmed = ask_yes_no("Confirm?")
             if not confirmed:
                 print("\nAdd cancelled. Returning to Main Menu.")
@@ -1333,7 +1383,7 @@ def resolve_sku(category_code, weave_type, batch_reserved_skus=None):
             return sku, chosen_existing_row
 
     sku = generate_next_sku(category_code, raw_rows, exclude_skus=batch_reserved_skus)
-    print(f"\n\033[1mYour SKU will be:\033[0m {sku}")
+    print(f"\n\033[1mYour SKU will be:\033[0m \033[38;5;214;1m{sku}\033[0m")
     confirmed = ask_yes_no("Confirm?")
     if not confirmed:
         print("\nAdd cancelled. Returning to Main Menu.")
@@ -1385,6 +1435,38 @@ def calculate_pricing(total_cost_inr, ecb_rate, pricing_path, pricing_value, dis
         "markup_pct": markup_pct,
         "margin_pct": margin_pct,
     }
+
+
+def _ask_pricing_path(back_label="Discard & exit", new_price=False):
+    """Shared by every "set the selling price" flow -- Add Inventory
+    (single and bulk), Reprice a Unit, and Discount Simulator -- which
+    previously each carried their own copy of this exact picker (UAT
+    finding, Section 12). Returns (pricing_path, pricing_value) ready to
+    hand straight to calculate_pricing(): pricing_path is "markup" or
+    "usd", pricing_value is the raw number entered. Returns (None, None)
+    if the user backs out via back_label -- callers keep their own
+    site-specific handling for that (different cancellation messages and
+    control flow at each site), only the picker itself is shared.
+    new_price=True prefixes every label with "New " (Reprice's own
+    wording, since it's changing a price that already exists)."""
+    _prefix = "New " if new_price else ""
+    path_choice = questionary.select(
+        "",
+        choices=[
+            "Enter a markup percentage",
+            "Enter a selling price (USD)",
+            questionary.Separator(" "),
+            _back_choice(back_label),
+        ],
+        qmark=f"\nHow would you like to set the {'new ' if new_price else ''}selling price?",
+        instruction=" ",
+        style=_MENU_STYLE,
+    ).unsafe_ask()
+    if path_choice in (None, back_label):
+        return None, None
+    if "markup" in path_choice.lower():
+        return "markup", ask_percent(f"{_prefix}Markup Percentage (e.g. 60 for 60%):", allow_zero=False)
+    return "usd", ask_number(f"{_prefix}Selling Price (USD):", allow_zero=False)
 
 
 def get_status_color(status):
@@ -1667,6 +1749,11 @@ def _enter_new_garment_type():
     Prompt for a new garment type name with validation and duplicate checking.
     Appends confirmed new names to GARMENT_TYPES.
     Returns the resolved garment type name (new or matched existing), or None (back).
+
+    Substring check is bidirectional (raw-in-existing OR existing-in-raw) --
+    catches a padded variant of an existing name ("Designer Blouse" for an
+    existing "Blouse"), which a one-directional check would miss since the
+    typed text is longer than what's on file, not shorter.
     """
     while True:
         raw = " ".join(input(f"\n\001\033[1m\002Enter new garment type name (or type 'back' to go back):\001\033[0m\002 {_ANSWER_COLOR}").split())
@@ -1678,8 +1765,23 @@ def _enter_new_garment_type():
             _warn("Please enter a name using letters and spaces only, minimum 2 characters.")
             continue
 
+        # Exact-duplicate guard, matching select_or_add_weave_type() and
+        # select_or_add_supplier() (UAT finding, Section 12) -- without
+        # this, an exact match fell into the same single-match "Did you
+        # mean X?" flow as a genuine near-duplicate, and declining that
+        # prompt (easy to do by habit) fell through to "confirm as new"
+        # with nothing stopping it: proven live to append a literal
+        # duplicate into GARMENT_TYPES from completely ordinary input.
+        # continue (not a recursive call) -- this function already loops
+        # on its own to re-prompt for a name, same as the length check
+        # just above.
+        if raw in GARMENT_TYPES:
+            _warn(f"'{raw}' already exists. Please select it from the list.")
+            continue
+
         raw_lower = raw.lower()
-        gt_sub = [g for g in GARMENT_TYPES if raw_lower in g.lower()]
+        gt_sub = [g for g in GARMENT_TYPES
+                  if raw_lower in g.lower() or (len(g) >= _MIN_DEDUP_MATCH_LEN and g.lower() in raw_lower)]
         gt_matches = gt_sub if gt_sub else difflib.get_close_matches(raw, GARMENT_TYPES, n=3, cutoff=0.6)
 
         if len(gt_matches) == 1:
@@ -1688,22 +1790,34 @@ def _enter_new_garment_type():
             # user said no — fall through to confirm as genuinely new
 
         elif len(gt_matches) > 1:
-            print(f"\n\033[38;5;202mClose matches found:\033[0m")
-            for i, m in enumerate(gt_matches, 1):
-                print(f"  {i}. {m}")
-            if ask_yes_no("Did you mean one of these?"):
-                while True:
-                    try:
-                        idx = int(input(f"\n\001\033[1m\002Select number:\001\033[0m\002 {_ANSWER_COLOR}").strip()) - 1
-                        print("\033[0m", end="")
-                        if 0 <= idx < len(gt_matches):
-                            return gt_matches[idx]
-                        _warn(f"Please enter a number between 1 and {len(gt_matches)}.")
-                    except ValueError:
-                        _warn("Please enter a valid number.")
-            # user said no — fall through to confirm as genuinely new
+            # Arrow-key select, matching select_or_add_weave_type() and
+            # select_or_add_supplier()'s own multi-match pattern exactly
+            # (UAT finding, Section 12) -- this used to be a plain numbered
+            # list with a separate "Did you mean one of these?" yes/no gate
+            # in front of a typed-number entry, the only one of the three
+            # dedup flows not using questionary.select() here. That meant
+            # an extra confirmation step the other two don't have, and its
+            # own free-text number parsing (try/except ValueError, a
+            # manual bounds check, re-prompting on a bad entry) that an
+            # arrow-key menu makes structurally impossible to need.
+            pick = questionary.select(
+                "",
+                choices=gt_matches + [
+                    questionary.Separator("─" * 44),
+                    questionary.Choice(
+                        title=[("class:register-option", "+ None of these — add as new")],
+                        value="__NONE__",
+                    ),
+                ],
+                qmark="\nMultiple close matches found — did you mean one of these?",
+                instruction=" ",
+                style=_MENU_STYLE,
+            ).unsafe_ask()
+            if pick != "__NONE__":
+                return pick
+            # "none of these" -- proceed as genuinely new
 
-        print(f"\n\033[1mNew garment type:\033[0m {raw}.")
+        print(f"\n\033[1mNew garment type:\033[0m \033[38;5;214;1m{raw}\033[0m.")
         if ask_yes_no("Confirm?"):
             GARMENT_TYPES.append(raw)
             return raw
@@ -1750,7 +1864,14 @@ def select_or_add_weave_type():
                 garment_choice = resolved
                 garment_is_new = len(GARMENT_TYPES) > gt_count_before
                 break
-            # None → back, loop to garment type menu
+            # None → back, loop to garment type menu. qmark="Select garment
+            # type:" has no leading "\n" of its own (the first entry into
+            # this loop gets its gap from _add_single_unit()'s own print()
+            # right before the first call, so adding one to the qmark
+            # itself would double up there) -- this explicit print() gives
+            # the re-entry case the same gap, matching that convention
+            # instead of changing the qmark (UAT finding, Section 12).
+            print()
 
         # Step 2: Filtered list for this garment type, sorted alphabetically
         filtered_names = sorted(
@@ -1809,7 +1930,11 @@ def select_or_add_weave_type():
 
         break  # fall through to Step 3 (add-new flow) below, outside the loop
 
-    # Add new weave type flow — type-first, fuzzy-match second
+    # Add new weave type flow — type-first, fuzzy-match second. Substring
+    # check is bidirectional (raw-in-existing OR existing-in-raw) -- catches
+    # a padded variant of an existing name, which a one-directional check
+    # would miss since the typed text is longer than what's on file, not
+    # shorter.
     raw = " ".join(input(f"\n\001\033[1m\002Enter new weave type name (or press Enter / type 'back' to go back):\001\033[0m\002 {_ANSWER_COLOR}").split())
     print("\033[0m", end="")
     if not raw or raw.lower() == "back":
@@ -1823,7 +1948,8 @@ def select_or_add_weave_type():
         return select_or_add_weave_type()
 
     raw_lower = raw.lower()
-    substring_matches = [k for k in WEAVE_TYPES if raw_lower in k.lower()]
+    substring_matches = [k for k in WEAVE_TYPES
+                          if raw_lower in k.lower() or (len(k) >= _MIN_DEDUP_MATCH_LEN and k.lower() in raw_lower)]
     matches = substring_matches if substring_matches else difflib.get_close_matches(raw, list(WEAVE_TYPES.keys()), n=3, cutoff=0.6)
 
     if len(matches) == 1:
@@ -1854,6 +1980,14 @@ def select_or_add_weave_type():
         print("\nNo existing weave type matches that name.")
 
     new_name = raw
+    # Acknowledges the decline before dropping into the category-code
+    # listing below -- unlike select_or_add_supplier()/garment type, which
+    # both confirm immediately after a decline ("You are adding: X" /
+    # "New garment type: X."), weave type's own category-code requirement
+    # means there's otherwise nothing between "no, that's not it" and a
+    # 20+ line reference table, reading as if the decline was silently
+    # skipped rather than acted on (UAT finding, Section 12).
+    print(f"\n\033[1mProceeding to register:\033[0m \033[38;5;214;1m{new_name}\033[0m")
 
     # Show used codes for this garment type only
     print(f"\nCurrently used category codes ({garment_choice}):")
@@ -1884,34 +2018,45 @@ def select_or_add_weave_type():
             continue
         break
 
-    print(f"\n\033[1mNew weave type:\033[0m {new_name}  —  \033[1mCategory Code:\033[0m {new_code}")
+    print(f"\n\033[1mNew weave type:\033[0m \033[38;5;214;1m{new_name}\033[0m  —  \033[1mCategory Code:\033[0m \033[38;5;214;1m{new_code}\033[0m")
     confirmed = ask_yes_no("Confirm?")
     if not confirmed:
-        print("Cancelled.")
+        print("\nCancelled.")
         return select_or_add_weave_type()
 
-    # Garment type step — pre-filled from bucket, confirm or override
-    label = "your new garment type" if garment_is_new else "based on your selection"
-    print(f"\n\033[1mGarment type:\033[0m {garment_choice} ({label}).")
-    garment_confirm = questionary.select(
-        "",
-        choices=["Yes", "No — select a different type"],
-        qmark="\nIs this correct?",
-        instruction=" ",
-        style=_MENU_STYLE,
-    ).unsafe_ask()
-    if "No" in garment_confirm:
-        garment_type = questionary.select(
+    # Garment type step — only re-confirmed when garment_choice was just
+    # created as a brand-new garment type moments ago (a final check
+    # before permanently introducing a new top-level classification).
+    # Skipped entirely when it's an existing type, since the user already
+    # explicitly picked it via Step 1's own arrow-key select, seconds
+    # earlier in this same continuous flow -- re-asking the identical
+    # question here is friction with nothing behind it, not a safety net:
+    # Step 2's "Change garment type" back-choice already covers realizing
+    # mid-search you're in the wrong bucket, before this point is ever
+    # reached (UAT finding, Section 12, full op-wide audit).
+    if garment_is_new:
+        print(f"\n\033[1mGarment type:\033[0m \033[38;5;214;1m{garment_choice}\033[0m (your new garment type).")
+        garment_confirm = questionary.select(
             "",
-            choices=GARMENT_TYPES + [
-                questionary.Separator(" "),
-                _back_choice(f"Keep '{garment_choice}' after all"),
-            ],
-            qmark="\nSelect garment type:",
+            choices=["Yes", "No — select a different type"],
+            qmark="\nIs this correct?",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
-        if garment_type == f"Keep '{garment_choice}' after all":
+        if "No" in garment_confirm:
+            garment_type = questionary.select(
+                "",
+                choices=GARMENT_TYPES + [
+                    questionary.Separator(" "),
+                    _back_choice(f"Keep '{garment_choice}' after all"),
+                ],
+                qmark="\nSelect garment type:",
+                instruction=" ",
+                style=_MENU_STYLE,
+            ).unsafe_ask()
+            if garment_type == f"Keep '{garment_choice}' after all":
+                garment_type = garment_choice
+        else:
             garment_type = garment_choice
     else:
         garment_type = garment_choice
@@ -1977,7 +2122,13 @@ def select_or_add_supplier():
     if chosen != "__ADD_NEW__":
         return chosen
 
-    # Add new supplier flow — type-first, fuzzy-match second
+    # Add new supplier flow — type-first, fuzzy-match second. Substring
+    # check is bidirectional (raw-in-existing OR existing-in-raw) -- catches
+    # a padded variant of an existing supplier name ("Lalitha Silks Pvt
+    # Ltd" for an existing "Lalitha Silks"), which a one-directional check
+    # would miss since the typed text is longer than what's on file, not
+    # shorter -- exactly the kind of real-world duplication supplier names
+    # are prone to.
     raw = " ".join(input(f"\n\001\033[1m\002Enter supplier name (or press Enter / type 'back' to go back):\001\033[0m\002 {_ANSWER_COLOR}").split())
     print("\033[0m", end="")
     if not raw or raw.lower() == "back":
@@ -1989,7 +2140,8 @@ def select_or_add_supplier():
         return select_or_add_supplier()
 
     raw_lower = raw.lower()
-    substring_matches = [s for s in SUPPLIERS if raw_lower in s.lower()]
+    substring_matches = [s for s in SUPPLIERS
+                          if raw_lower in s.lower() or (len(s) >= _MIN_DEDUP_MATCH_LEN and s.lower() in raw_lower)]
     matches = substring_matches if substring_matches else difflib.get_close_matches(raw, SUPPLIERS, n=3, cutoff=0.6)
 
     if len(matches) == 1:
@@ -2020,10 +2172,10 @@ def select_or_add_supplier():
         print(f"\nNo existing supplier matches that name.")
 
     new_name = raw
-    print(f"\n\033[1mYou are adding:\033[0m {new_name}")
+    print(f"\n\033[1mYou are adding:\033[0m \033[38;5;214;1m{new_name}\033[0m")
     confirmed = ask_yes_no("Confirm?")
     if not confirmed:
-        print("Cancelled.")
+        print("\nCancelled.")
         return select_or_add_supplier()
 
     # Write new supplier to Supplier tab
@@ -2175,7 +2327,10 @@ def load_countries():
 
 def select_country():
     """
-    Search-as-you-type country selection using plain input().
+    Search-as-you-type country selection: a free-text input() narrows by
+    substring, then a single match auto-confirms via yes/no while 2+
+    matches drop into an arrow-key select (UAT finding, Section 12, full
+    op-wide audit -- previously a manual numbered list capped at 10).
     Returns (country_name, dial_code), or (None, None) if cancelled.
     """
     display_entries = [
@@ -2212,28 +2367,31 @@ def select_country():
                 return entry["name"], entry["dial_code"]
             continue
 
-        truncated = len(matches) > 10
-        display_matches = matches[:10]
-        print()
-        for i, entry in enumerate(display_matches, 1):
-            print(f"  {i}. {entry['display']}")
-        if truncated:
-            print(f"\n  Showing top 10 of {len(matches)} results. Type more characters to narrow down.")
+        # Arrow-key select, not a numbered list with manual digit parsing
+        # (UAT finding, Section 12, full op-wide audit) -- matches
+        # select_or_add_weave_type(), select_or_add_supplier(), and
+        # _enter_new_garment_type()'s own multi-match pattern, removing the
+        # free-text number entry and its own try/except validation loop the
+        # same way that fix did. No result cap, same reasoning as Finding
+        # 42: this list was never an interactive widget with a reachability
+        # question to begin with -- it was plain printed text, so anything
+        # past one screen was already sitting in ordinary terminal
+        # scrollback, same as every other uncapped static listing in this
+        # file. Checked against the real data too: 242 countries total, so
+        # the old 10-result cap was never protecting against anything a
+        # realistic search term would produce.
+        pick = questionary.select(
+            "",
+            choices=[
+                questionary.Choice(title=entry["display"], value=entry) for entry in matches
+            ],
+            qmark="\nWhich country did you mean?",
+            instruction=" ",
+            style=_MENU_STYLE,
+        ).unsafe_ask()
+        if pick is None:
             continue
-
-        while True:
-            raw_num = input(f"\n\001\033[1m\002Enter the number of your choice (or press Enter to search again):\001\033[0m\002 {_ANSWER_COLOR}").strip()
-            print("\033[0m", end="")
-            if not raw_num:
-                break
-            try:
-                idx = int(raw_num) - 1
-                if 0 <= idx < len(display_matches):
-                    entry = display_matches[idx]
-                    return entry["name"], entry["dial_code"]
-                _warn(f"Please enter a number between 1 and {len(display_matches)}.")
-            except ValueError:
-                _warn("Please enter a valid number.")
+        return pick["name"], pick["dial_code"]
 
 
 def _customer_identity_key(name, country_code="", phone="", email=""):
@@ -2527,9 +2685,11 @@ def update_customer_details_if_needed(customer, raw_rows):
                     continue
                 new_name = " ".join(new_name.split())
                 if " " not in new_name:
-                    print(f"\n\033[33m⚠  SINGLE NAME DETECTED\033[0m")
-                    print(f"\033[2m{'—' * 50}\033[0m")
-                    print("Adding a last name helps distinguish customers with the same first name.")
+                    # Bold, not _warn()-style (UAT finding, Section 12): a
+                    # single name is perfectly valid data, not a problem to
+                    # correct -- this is pure optional advice, same
+                    # reasoning as the Op 9 dedup messages.
+                    print(f"\n\033[1mSingle name entered:\033[0m adding a last name helps distinguish customers with the same first name.")
                     if ask_yes_no("Would you like to add a last name?"):
                         continue
                 updated["name"] = new_name
@@ -2736,7 +2896,7 @@ def update_customer_details_if_needed(customer, raw_rows):
             continue
 
         # Discard
-        print(f"\n\033[38;5;202mUpdate cancelled. Existing customer profile retained.\033[0m")
+        print("\nUpdate cancelled. Existing customer profile retained.")
         return customer
 
 
@@ -2872,9 +3032,11 @@ def enter_new_customer(prefill_name="", raw_rows=None):
             continue
         name = " ".join(name.split())
         if " " not in name:
-            print(f"\n\033[33m⚠  SINGLE NAME DETECTED\033[0m")
-            print(f"\033[2m{'—' * 50}\033[0m")
-            print("Adding a last name helps distinguish customers with the same first name.")
+            # Bold, not _warn()-style (UAT finding, Section 12): a single
+            # name is perfectly valid data, not a problem to correct --
+            # this is pure optional advice, same reasoning as the Op 9
+            # dedup messages.
+            print(f"\n\033[1mSingle name entered:\033[0m adding a last name helps distinguish customers with the same first name.")
             if ask_yes_no("Would you like to add a last name?"):
                 continue
 
@@ -2911,7 +3073,13 @@ def enter_new_customer(prefill_name="", raw_rows=None):
                 matches = [c for c in all_customers if c["name"] in matched_names]
 
                 if matches:
-                    print(f"\n\033[38;5;202mClose matches found:\033[0m")
+                    # Bold, not the orange "confirmed choice" color (UAT
+                    # finding, Section 12): this is the same "did you mean
+                    # an existing record?" pattern as Op 9/weave-type/
+                    # supplier's dedup messages, which all use bold -- the
+                    # orange here was a third, inconsistent styling for
+                    # the same kind of message, not a deliberate signal.
+                    print(f"\n\033[1mClose matches found:\033[0m")
                     print(f"\033[2m{'—' * 50}\033[0m")
                     for c in matches:
                         location = ", ".join(p for p in [c["city"], c["country"]] if p) or "location unknown"
@@ -2922,32 +3090,39 @@ def enter_new_customer(prefill_name="", raw_rows=None):
                             c = matches[0]
                             location = ", ".join(p for p in [c["city"], c["country"]] if p) or "location unknown"
                             purchases = f"{c['count']} purchase{'s' if c['count'] != 1 else ''}"
-                            print(f"\n\033[38;5;202mClose matches found:\033[0m")
+                            print(f"\n\033[1mClose matches found:\033[0m")
                             print(f"\033[2m{'—' * 50}\033[0m")
                             print(f"  {c['name']}  —  {location}  —  {purchases}")
                             if ask_yes_no("Confirm?"):
                                 return c
                             # declined — continue with new entry below
                         else:
-                            print()
-                            for i, c in enumerate(matches, 1):
-                                location = ", ".join(p for p in [c["city"], c["country"]] if p) or "location unknown"
-                                purchases = f"{c['count']} purchase{'s' if c['count'] != 1 else ''}"
-                                print(f"  {i}. {c['name']}  —  {location}  —  {purchases}")
-                            picked = None
-                            while picked is None:
-                                try:
-                                    idx = int(input(f"\n\001\033[1m\002Enter the number of your choice:\001\033[0m\002 {_ANSWER_COLOR}").strip()) - 1
-                                    print("\033[0m", end="")
-                                    if 0 <= idx < len(matches):
-                                        picked = matches[idx]
-                                    else:
-                                        _warn(f"Please enter a number between 1 and {len(matches)}.")
-                                except ValueError:
-                                    _warn("Please enter a valid number.")
+                            # Arrow-key select, not a numbered list with
+                            # manual digit parsing (UAT finding, Section
+                            # 12) -- matches select_or_add_weave_type(),
+                            # select_or_add_supplier(), and
+                            # _enter_new_garment_type()'s own multi-match
+                            # pattern, removing the free-text number entry
+                            # and its own try/except validation loop the
+                            # same way that fix did.
+                            pick_idx = questionary.select(
+                                "",
+                                choices=[
+                                    questionary.Choice(
+                                        title=f"{c['name']}  —  "
+                                              f"{', '.join(p for p in [c['city'], c['country']] if p) or 'location unknown'}  —  "
+                                              f"{c['count']} purchase{'s' if c['count'] != 1 else ''}",
+                                        value=i,
+                                    ) for i, c in enumerate(matches)
+                                ],
+                                qmark="\nWhich customer did you mean?",
+                                instruction=" ",
+                                style=_MENU_STYLE,
+                            ).unsafe_ask()
+                            picked = matches[pick_idx]
                             location = ", ".join(p for p in [picked["city"], picked["country"]] if p) or "location unknown"
                             purchases = f"{picked['count']} purchase{'s' if picked['count'] != 1 else ''}"
-                            print(f"\n\033[38;5;202mClose matches found:\033[0m")
+                            print(f"\n\033[1mClose matches found:\033[0m")
                             print(f"\033[2m{'—' * 50}\033[0m")
                             print(f"  {picked['name']}  —  {location}  —  {purchases}")
                             if ask_yes_no("Confirm?"):
@@ -3076,9 +3251,11 @@ def enter_new_customer(prefill_name="", raw_rows=None):
                     _warn("Name can only contain letters, spaces, hyphens, apostrophes, and periods (minimum 2 characters).")
                     continue
                 if " " not in new_name.strip():
-                    print(f"\n\033[33m⚠  SINGLE NAME DETECTED\033[0m")
-                    print(f"\033[2m{'—' * 50}\033[0m")
-                    print("Adding a last name helps distinguish customers with the same first name.")
+                    # Bold, not _warn()-style (UAT finding, Section 12): a
+                    # single name is perfectly valid data, not a problem to
+                    # correct -- this is pure optional advice, same
+                    # reasoning as the Op 9 dedup messages.
+                    print(f"\n\033[1mSingle name entered:\033[0m adding a last name helps distinguish customers with the same first name.")
                     if ask_yes_no("Would you like to add a last name?"):
                         continue
                 name = new_name
@@ -3353,27 +3530,10 @@ def _add_single_unit():
 
     # Step 5: Pricing path (loops until valid margin or explicit cancel)
     while True:
-        path_choice = questionary.select(
-            "",
-            choices=[
-                "Enter a markup percentage",
-                "Enter a selling price (USD)",
-                questionary.Separator(" "),
-                _back_choice("Discard & exit"),
-            ],
-            qmark="\nHow would you like to set the selling price?",
-            instruction=" ",
-            style=_MENU_STYLE,
-        ).unsafe_ask()
-        if path_choice == "Discard & exit":
+        pricing_path, pricing_value = _ask_pricing_path()
+        if pricing_path is None:
             print("\nAdd cancelled. Returning to Main Menu.")
             return
-        if "markup" in path_choice.lower():
-            pricing_path = "markup"
-            pricing_value = ask_percent("Markup Percentage (e.g. 60 for 60%):", allow_zero=False)
-        else:
-            pricing_path = "usd"
-            pricing_value = ask_number("Selling Price (USD):", allow_zero=False)
 
         pricing = calculate_pricing(total_cost_inr, ecb_rate, pricing_path, pricing_value)
 
@@ -3622,27 +3782,10 @@ def _add_bulk_units(batch_size):
         skipped = False
         pricing = None
         while True:
-            path_choice = questionary.select(
-                "",
-                choices=[
-                    "Enter a markup percentage",
-                    "Enter a selling price (USD)",
-                    questionary.Separator(" "),
-                    _back_choice("Skip this unit"),
-                ],
-                qmark="\nHow would you like to set the selling price?",
-                instruction=" ",
-                style=_MENU_STYLE,
-            ).unsafe_ask()
-            if path_choice == "Skip this unit":
+            pricing_path, pricing_value = _ask_pricing_path(back_label="Skip this unit")
+            if pricing_path is None:
                 skipped = True
                 break
-            if "markup" in path_choice.lower():
-                pricing_path = "markup"
-                pricing_value = ask_percent("Markup Percentage (e.g. 60 for 60%):", allow_zero=False)
-            else:
-                pricing_path = "usd"
-                pricing_value = ask_number("Selling Price (USD):", allow_zero=False)
 
             pricing = calculate_pricing(total_cost_inr, ecb_rate, pricing_path, pricing_value)
 
@@ -3804,7 +3947,7 @@ def _add_bulk_units(batch_size):
 
     _print_boxed(f"BULK INTAKE SUMMARY ({len(units)} unit{'s' if len(units) != 1 else ''})", _summary_sections)
 
-    confirmed = ask_yes_no(f"\nWrite all {len(units)} unit{'s' if len(units) != 1 else ''} to the master sheet?")
+    confirmed = ask_yes_no(f"Write all {len(units)} unit{'s' if len(units) != 1 else ''} to the master sheet?")
     if not confirmed:
         print("\nBulk add cancelled. Nothing was written. Returning to Main Menu.")
         return
@@ -3870,9 +4013,13 @@ def ask_payment_method():
         style=_MENU_STYLE,
     ).unsafe_ask()
     if method == "Digital Transfer (CashApp, PayPal, Venmo, Zelle)":
+        # Matches the order the prior step's own label already promised
+        # (UAT finding, Section 12) -- this list was the exact reverse of
+        # it, so choosing "Digital Transfer" showed CashApp/PayPal/Venmo/
+        # Zelle one screen, then Zelle/Venmo/PayPal/CashApp the very next.
         method = questionary.select(
             "",
-            choices=["Zelle", "Venmo", "PayPal", "CashApp"],
+            choices=["CashApp", "PayPal", "Venmo", "Zelle"],
             qmark="\nDigital transfer method:",
             instruction=" ",
             style=_MENU_STYLE,
@@ -3903,6 +4050,73 @@ def record_sale():
         _record_single_sale()
     else:
         _record_bulk_sale(batch_size)
+
+
+def _check_sale_discount(selling_price_usd, total_cost_usd, weave_type, discount_pct, back_label="Discard & exit"):
+    """Shared by _record_single_sale() and _record_bulk_sale() -- previously
+    each carried its own identical copy of this below-cost/low-margin alert
+    and discount-adjustment menu (UAT finding, Section 12). Loops until the
+    price is healthy or the operator explicitly proceeds past a warning.
+
+    Deliberately separate from check_pricing_warnings() (used by Add
+    Inventory, Reprice, and the inventory editor's cost-field edits)
+    rather than merged into it: that function's second menu option
+    re-opens the markup/price picker ("Recalibrate selling price") --
+    right when you're actively setting a price. Here the price is already
+    fixed and the lever is the discount on top of it ("Re-enter discount
+    percentage" / "Remove discount and proceed at full price") -- a
+    genuinely different action, not just different wording, so folding
+    both into one function would mean mode-switching logic serving two
+    different workflows rather than one function doing one thing.
+
+    Returns (discount_pct, actual_selling_price_usd, gross_profit_usd,
+    markup_pct, margin_pct) once healthy or explicitly proceeded past a
+    warning, or None if the operator backed out via back_label -- the
+    caller decides what backing out means (cancel the whole sale, or
+    skip just this one unit in a batch)."""
+    while True:
+        if discount_pct is not None:
+            actual_selling_price_usd = round(selling_price_usd * (1 - discount_pct / 100), 2)
+        else:
+            actual_selling_price_usd = selling_price_usd
+        gross_profit_usd = round(actual_selling_price_usd - total_cost_usd, 2)
+        markup_pct = round((gross_profit_usd / total_cost_usd) * 100, 2) if total_cost_usd else 0
+        margin_pct = round((gross_profit_usd / actual_selling_price_usd) * 100, 2) if actual_selling_price_usd else 0
+
+        _pricing_desc = "This discount puts" if discount_pct is not None else "This unit's full price (no discount) puts"
+        if gross_profit_usd < 0:
+            print(f"\n\033[91m⚠  BELOW COST\033[0m")
+            print(f"\033[2m{'—' * 50}\033[0m")
+            print(f"{_pricing_desc} Gross Profit at ${gross_profit_usd:,.2f}. The unit will sell at a loss.")
+        elif margin_pct < _margin_thresholds(weave_type)[0]:
+            _flag_below = _margin_thresholds(weave_type)[0]
+            print(f"\n{get_margin_color(margin_pct, weave_type)}△ LOW MARGIN — "
+                  f"Margin sits at {margin_pct:.1f}%, below the {_flag_below}% threshold.\033[0m")
+        else:
+            return discount_pct, actual_selling_price_usd, gross_profit_usd, markup_pct, margin_pct
+
+        print()
+        _proceed_label = "Proceed with current discount" if discount_pct is not None else "Proceed at full price"
+        _choices = ["Re-enter discount percentage"]
+        if discount_pct is not None:
+            _choices.append("Remove discount and proceed at full price")
+        _choices += [_proceed_label, questionary.Separator(" "), _back_choice(back_label)]
+        alert_choice = questionary.select(
+            "",
+            choices=_choices,
+            qmark="How would you like to proceed?",
+            instruction=" ",
+            style=_MENU_STYLE,
+        ).unsafe_ask()
+        if alert_choice in (None, back_label):
+            return None
+        if alert_choice == "Re-enter discount percentage":
+            discount_pct = ask_percent("Discount Percentage:", allow_zero=False)
+            continue
+        if alert_choice == "Remove discount and proceed at full price":
+            discount_pct = None
+            continue
+        return discount_pct, actual_selling_price_usd, gross_profit_usd, markup_pct, margin_pct
 
 
 def _record_single_sale():
@@ -4044,56 +4258,18 @@ def _record_single_sale():
         markup_pct = round((gross_profit_usd / total_cost_usd) * 100, 2) if total_cost_usd else 0
         margin_pct = round((gross_profit_usd / actual_selling_price_usd) * 100, 2) if actual_selling_price_usd else 0
     else:
-        while True:
-            # discount_pct can go back to None mid-loop (operator removed it
-            # below) -- re-evaluating from the top each pass, rather than
-            # exiting immediately after removing it, is what catches the
-            # unit's own full price still being below cost or low-margin
-            # (units can already be added/repriced at a thin/negative margin
-            # via "proceed anyway" at those steps, so this isn't hypothetical).
-            if discount_pct is not None:
-                actual_selling_price_usd = round(selling_price_usd * (1 - discount_pct / 100), 2)
-            else:
-                actual_selling_price_usd = selling_price_usd
-            gross_profit_usd = round(actual_selling_price_usd - total_cost_usd, 2)
-            markup_pct = round((gross_profit_usd / total_cost_usd) * 100, 2) if total_cost_usd else 0
-            margin_pct = round((gross_profit_usd / actual_selling_price_usd) * 100, 2) if actual_selling_price_usd else 0
-
-            _pricing_desc = "This discount puts" if discount_pct is not None else "This unit's full price (no discount) puts"
-            if gross_profit_usd < 0:
-                print(f"\n\033[91m⚠  BELOW COST\033[0m")
-                print(f"\033[2m{'—' * 50}\033[0m")
-                print(f"{_pricing_desc} Gross Profit at ${gross_profit_usd:,.2f}. The unit will sell at a loss.")
-            elif margin_pct < _margin_thresholds(row["Weave Type / Cluster"])[0]:
-                _flag_below = _margin_thresholds(row["Weave Type / Cluster"])[0]
-                print(f"\n{get_margin_color(margin_pct, row['Weave Type / Cluster'])}△ LOW MARGIN — "
-                      f"Margin sits at {margin_pct:.1f}%, below the {_flag_below}% threshold.\033[0m")
-            else:
-                break
-
-            print()
-            _proceed_label = "Proceed with current discount" if discount_pct is not None else "Proceed at full price"
-            _choices = ["Re-enter discount percentage"]
-            if discount_pct is not None:
-                _choices.append("Remove discount and proceed at full price")
-            _choices += [_proceed_label, questionary.Separator(" "), _back_choice("Discard & exit")]
-            alert_choice = questionary.select(
-                "",
-                choices=_choices,
-                qmark="How would you like to proceed?",
-                instruction=" ",
-                style=_MENU_STYLE,
-            ).unsafe_ask()
-            if alert_choice == "Discard & exit":
-                print("\nSale cancelled. Returning to Main Menu.")
-                return
-            if alert_choice == "Re-enter discount percentage":
-                discount_pct = ask_percent("Discount Percentage:", allow_zero=False)
-                continue
-            if alert_choice == "Remove discount and proceed at full price":
-                discount_pct = None
-                continue
-            break
+        # discount_pct can go back to None inside _check_sale_discount()
+        # (operator removed it) -- it re-evaluates from the top each pass,
+        # rather than exiting immediately after removing it, which is what
+        # catches the unit's own full price still being below cost or
+        # low-margin (units can already be added/repriced at a thin/
+        # negative margin via "proceed anyway" at those steps, so this
+        # isn't hypothetical).
+        result = _check_sale_discount(selling_price_usd, total_cost_usd, row["Weave Type / Cluster"], discount_pct)
+        if result is None:
+            print("\nSale cancelled. Returning to Main Menu.")
+            return
+        discount_pct, actual_selling_price_usd, gross_profit_usd, markup_pct, margin_pct = result
 
     # Step 6: Payment status
     print()
@@ -4495,50 +4671,12 @@ def _record_bulk_sale(batch_size):
             markup_pct = round((gross_profit_usd / total_cost_usd) * 100, 2) if total_cost_usd else 0
             margin_pct = round((gross_profit_usd / actual_selling_price_usd) * 100, 2) if actual_selling_price_usd else 0
         else:
-            while True:
-                if discount_pct is not None:
-                    actual_selling_price_usd = round(selling_price_usd * (1 - discount_pct / 100), 2)
-                else:
-                    actual_selling_price_usd = selling_price_usd
-                gross_profit_usd = round(actual_selling_price_usd - total_cost_usd, 2)
-                markup_pct = round((gross_profit_usd / total_cost_usd) * 100, 2) if total_cost_usd else 0
-                margin_pct = round((gross_profit_usd / actual_selling_price_usd) * 100, 2) if actual_selling_price_usd else 0
-
-                _pricing_desc = "This discount puts" if discount_pct is not None else "This unit's full price (no discount) puts"
-                if gross_profit_usd < 0:
-                    print(f"\n\033[91m⚠  BELOW COST\033[0m")
-                    print(f"\033[2m{'—' * 50}\033[0m")
-                    print(f"{_pricing_desc} Gross Profit at ${gross_profit_usd:,.2f}. The unit will sell at a loss.")
-                elif margin_pct < _margin_thresholds(row["Weave Type / Cluster"])[0]:
-                    _flag_below = _margin_thresholds(row["Weave Type / Cluster"])[0]
-                    print(f"\n{get_margin_color(margin_pct, row['Weave Type / Cluster'])}△ LOW MARGIN — "
-                          f"Margin sits at {margin_pct:.1f}%, below the {_flag_below}% threshold.\033[0m")
-                else:
-                    break
-
-                print()
-                _proceed_label = "Proceed with current discount" if discount_pct is not None else "Proceed at full price"
-                _choices = ["Re-enter discount percentage"]
-                if discount_pct is not None:
-                    _choices.append("Remove discount and proceed at full price")
-                _choices += [_proceed_label, questionary.Separator(" "), _back_choice("Skip this unit")]
-                alert_choice = questionary.select(
-                    "",
-                    choices=_choices,
-                    qmark="How would you like to proceed?",
-                    instruction=" ",
-                    style=_MENU_STYLE,
-                ).unsafe_ask()
-                if alert_choice == "Skip this unit":
-                    skip_unit = True
-                    break
-                if alert_choice == "Re-enter discount percentage":
-                    discount_pct = ask_percent("Discount Percentage:", allow_zero=False)
-                    continue
-                if alert_choice == "Remove discount and proceed at full price":
-                    discount_pct = None
-                    continue
-                break
+            result = _check_sale_discount(selling_price_usd, total_cost_usd, row["Weave Type / Cluster"],
+                                           discount_pct, back_label="Skip this unit")
+            if result is None:
+                skip_unit = True
+            else:
+                discount_pct, actual_selling_price_usd, gross_profit_usd, markup_pct, margin_pct = result
 
         if skip_unit:
             print(f"\nUnit {i} skipped — no data will be recorded for this unit.")
@@ -4643,7 +4781,7 @@ def _record_bulk_sale(batch_size):
             f"${u['amount_received']:<11,.2f}${u['amount_outstanding']:<12,.2f}{_status_c}{u['new_status']}\033[0m"
         )
     total_outstanding = round(sum(u["amount_outstanding"] for u in units), 2)
-    _print_boxed(f"BULK SALE SUMMARY ({len(units)} units)", [
+    _print_boxed(f"BULK SALE SUMMARY ({len(units)} unit{'s' if len(units) != 1 else ''})", [
         ("UNITS", _status_rows),
         ("TRANSACTION", [
             f"  \033[1m{'Customer:':<22}\033[0m{customer_name}",
@@ -4862,27 +5000,10 @@ def reprice_unit():
     # Step 4: Pricing path (loops until confirmed or cancelled)
     _sep = f"\033[2m{'—' * 50}\033[0m"
     while True:
-        path_choice = questionary.select(
-            "",
-            choices=[
-                "Enter a markup percentage",
-                "Enter a selling price (USD)",
-                questionary.Separator(" "),
-                _back_choice("Discard & exit"),
-            ],
-            qmark="\nHow would you like to set the new selling price?",
-            instruction=" ",
-            style=_MENU_STYLE,
-        ).unsafe_ask()
-        if path_choice == "Discard & exit":
+        pricing_path, pricing_value = _ask_pricing_path(new_price=True)
+        if pricing_path is None:
             print("\nReprice cancelled. Returning to Main Menu.")
             return
-        if "markup" in path_choice.lower():
-            pricing_value = ask_percent("New Markup Percentage:", allow_zero=False)
-            pricing_path = "markup"
-        else:
-            pricing_value = ask_number("New Selling Price (USD):", allow_zero=False)
-            pricing_path = "usd"
 
         pricing = calculate_pricing(total_cost_inr, ecb_rate, pricing_path, pricing_value)
 
@@ -5747,14 +5868,29 @@ def discount_simulator():
     def _sim(total_cost_usd, selling_price_usd, discount_pct, weave_type):
         """Print the simulation results block for a given discount percentage."""
         flag_below, _tier_target = _margin_thresholds(weave_type)
-        original_markup_pct  = round((selling_price_usd - total_cost_usd) / total_cost_usd * 100, 2) if total_cost_usd else 0
-        orig_gp_usd          = round(selling_price_usd - total_cost_usd, 2)
-        orig_margin_pct      = round(orig_gp_usd / selling_price_usd * 100, 2) if selling_price_usd else 0
-        discount_amount      = round(selling_price_usd * discount_pct / 100, 2)
-        actual_price         = round(selling_price_usd - discount_amount, 2)
-        gross_profit         = round(actual_price - total_cost_usd, 2)
-        margin_pct           = round(gross_profit / actual_price * 100, 2) if actual_price else 0
-        disc_markup_pct      = round((actual_price - total_cost_usd) / total_cost_usd * 100, 2) if total_cost_usd else 0
+        # Routed through calculate_pricing() -- ecb_rate=1 and
+        # pricing_path="usd" since total_cost_usd/selling_price_usd are
+        # already known in USD here, so no real currency conversion
+        # happens, this just reuses the one authoritative discount/margin
+        # formula instead of reimplementing it inline. The inline version
+        # (discount_amount computed separately, then subtracted -- two
+        # roundings) could diverge from calculate_pricing()'s single-step
+        # rounding by a cent (UAT finding, Section 12, confirmed directly:
+        # e.g. $99.50 at 5% off rounded to $94.52 one way, $94.53 the
+        # other). This is the same function every real price-setting
+        # action in the app already uses, so Discount Simulator's preview
+        # now always matches what actually happens.
+        orig = calculate_pricing(total_cost_usd, 1, "usd", selling_price_usd)
+        disc = calculate_pricing(total_cost_usd, 1, "usd", selling_price_usd, discount_pct=discount_pct)
+
+        original_markup_pct  = orig["markup_pct"]
+        orig_gp_usd          = orig["gross_profit_usd"]
+        orig_margin_pct      = orig["margin_pct"]
+        actual_price          = disc["actual_selling_price_usd"]
+        discount_amount       = round(selling_price_usd - actual_price, 2)
+        gross_profit          = disc["gross_profit_usd"]
+        margin_pct            = disc["margin_pct"]
+        disc_markup_pct       = disc["markup_pct"]
 
         gp_sign        = signed(gross_profit)
         mar_sign       = signed(margin_pct)
@@ -5970,29 +6106,21 @@ def discount_simulator():
             restart_pricing = True
             while restart_pricing:  # pricing loop
                 restart_pricing = False
-                path = questionary.select(
-                    "",
-                    choices=[
-                        "Enter a markup percentage",
-                        "Enter a selling price (USD)",
-                        questionary.Separator(" "),
-                        _back_choice("Discard & exit"),
-                    ],
-                    qmark="\nHow would you like to set the selling price?",
-                    instruction=" ",
-                    style=_MENU_STYLE,
-                ).unsafe_ask()
-                if path == "Discard & exit":
+                pricing_path, pricing_value = _ask_pricing_path()
+                if pricing_path is None:
                     break
-                if "markup" in path.lower():
-                    markup_val = ask_percent("Markup Percentage:", allow_zero=False)
-                    selling_price_usd = round(total_cost_usd * (1 + markup_val / 100), 2)
-                else:
-                    selling_price_usd = ask_number("Selling Price (USD):", allow_zero=False)
 
-                base_gross    = round(selling_price_usd - total_cost_usd, 2)
-                base_markup   = round(base_gross / total_cost_usd * 100, 2) if total_cost_usd else 0
-                base_margin   = round(base_gross / selling_price_usd * 100, 2) if selling_price_usd else 0
+                # Routed through calculate_pricing() -- the real
+                # total_cost_inr/ecb_rate are available here, so this is
+                # the exact same authoritative markup-to-price conversion
+                # Add Inventory and Reprice already use (UAT finding,
+                # Section 12), not a separate inline reimplementation that
+                # could round differently for the same inputs.
+                pricing       = calculate_pricing(total_cost_inr, ecb_rate, pricing_path, pricing_value)
+                selling_price_usd = pricing["selling_price_usd"]
+                base_gross    = pricing["gross_profit_usd"]
+                base_markup   = pricing["markup_pct"]
+                base_margin   = pricing["margin_pct"]
                 _base_gpc     = "\033[92m" if base_gross >= 0 else "\033[91m"
                 _base_gp_sign = signed(base_gross)
                 _base_m_sign  = signed(base_margin)
@@ -6593,7 +6721,7 @@ def _process_bulk_outstanding_payment(selected_rows):
                 f"  {u['sku']:<14}${u['outstanding']:<11,.2f}${u['payment_share']:<11,.2f}"
                 f"${u['new_outstanding']:<11,.2f}{_status_c}{u['new_status']}\033[0m"
             )
-        _print_boxed(f"BULK PAYMENT SUMMARY ({len(_units)} units)", [
+        _print_boxed(f"BULK PAYMENT SUMMARY ({len(_units)} unit{'s' if len(_units) != 1 else ''})", [
             ("UNITS", _rows),
             ("TRANSACTION", [
                 f"  \033[1m{'Customer:':<22}\033[0m{customer_name}",
@@ -7160,9 +7288,11 @@ def manage_reservation():
                     _initial_name  = None
                     reserver_name = ask_text("Reserver's Name:")
                 if " " not in reserver_name.strip():
-                    print(f"\n\033[33m⚠  SINGLE NAME DETECTED\033[0m")
-                    print(f"\033[2m{'—' * 50}\033[0m")
-                    print("Adding a last name helps distinguish customers with the same first name.")
+                    # Bold, not _warn()-style (UAT finding, Section 12): a
+                    # single name is perfectly valid data, not a problem to
+                    # correct -- this is pure optional advice, same
+                    # reasoning as the Op 9 dedup messages.
+                    print(f"\n\033[1mSingle name entered:\033[0m adding a last name helps distinguish customers with the same first name.")
                     if ask_yes_no("Would you like to add a last name?"):
                         continue
                 break
@@ -8821,6 +8951,1312 @@ def generate_product_description():
     _offer_sibling_sync(_changed_fields)
 
 
+# =============================================================================
+# PHASE — OPERATION 12: MANAGE EXPENSES
+# =============================================================================
+# Full design history: docs/Manage_Expenses_Operation_Scope.md
+
+EXPENSE_CATEGORIES = [
+    "Sales Platform & Transaction Fees",
+    "Marketing & Advertising",
+    "Fulfillment & Shipping",
+    "Exhibitions & Popups",
+    "Software & Subscriptions",
+    "Storage & Supplies",
+    "Professional & Legal",
+    "Banking & Foreign Exchange",
+    "Supplier Relationships & Sourcing",
+]
+
+_EXPENSE_LOG_HEADERS = ["Expense ID", "Date", "Type", "Category", "Subcategory",
+                        "Amount (USD)", "Description", "Recurring (Y/N)", "Recurring Series ID"]
+_REGISTRY_HEADERS = ["Registry ID", "Category", "Subcategory", "Description", "Type",
+                     "Last Amount", "Cadence (Months)", "Last Logged Date",
+                     "Last Reviewed Date", "Active (Y/N)", "Billing Day"]
+# "Recurring Series ID" on Expense Log and "Registry ID" here are a UAT
+# finding (see docs/Manage_Expenses_Operation_Scope.md Section 11): matching
+# a logged expense back to its registry row by Category+Subcategory+exact
+# date was fragile -- editing Description, Category, or Date on a recurring
+# entry silently broke the match, and two series sharing the same
+# Category+Subcategory could collide. A direct ID reference removes the
+# need to re-derive the match from mutable fields entirely. "Last Reviewed
+# Date" is a second, separate UAT finding: Skip previously had nowhere to
+# record itself, so a skipped item resurfaced on every future sweep
+# forever -- it now advances independently of "Last Logged Date", which
+# stays reserved for when a payment was actually logged.
+
+
+def connect_to_expense_log_sheet():
+    """Return the 'Expense Log' worksheet using the cached spreadsheet connection."""
+    if _spreadsheet_cache is None:
+        connect_to_sheet()
+    return _spreadsheet_cache.worksheet("Expense Log")
+
+
+def connect_to_expense_subcategories_sheet():
+    """Return the 'Expense Subcategories' worksheet using the cached spreadsheet connection."""
+    if _spreadsheet_cache is None:
+        connect_to_sheet()
+    return _spreadsheet_cache.worksheet("Expense Subcategories")
+
+
+def connect_to_recurring_registry_sheet():
+    """Return the 'Recurring Expense Registry' worksheet using the cached spreadsheet connection."""
+    if _spreadsheet_cache is None:
+        connect_to_sheet()
+    return _spreadsheet_cache.worksheet("Recurring Expense Registry")
+
+
+def _parse_mmddyyyy(text):
+    """Parse an MM-DD-YYYY string (the convention every date column in this
+    app uses) into a date, or None if blank/malformed -- never raises, so a
+    stray manual edit on the sheet can't crash the sweep."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.strptime(text, "%m-%d-%Y").date()
+    except ValueError:
+        return None
+
+
+def _add_months(d, months, anchor_day=None):
+    """Add a whole number of months to a date, clamping the day into
+    whatever the target month actually has (e.g. Jan 31 + 1 month → Feb 28,
+    not an invalid Feb 31). No third-party dependency -- the only other
+    place a date needs month arithmetic in this app is the recurring sweep.
+
+    anchor_day, if given, is the day-of-month to target instead of d.day --
+    this is what lets a recurring series re-anchor to its original billing
+    day every cycle (UAT finding, Section 12: without this, a series
+    permanently drifted off its original day the first time a short month
+    forced a one-time clamp). Clamps only for whichever specific month
+    needs it, same as real subscription billing (Stripe, credit card
+    statement cycles): the 31st survives a short February by landing on
+    the 28th just that once, then goes right back to the 31st the next
+    time a long-enough month comes around, rather than settling
+    permanently onto the 28th. Defaults to d.day for a plain date shift
+    with no anchor concept."""
+    target_day = anchor_day if anchor_day is not None else d.day
+    month_index = d.month - 1 + months
+    year = d.year + month_index // 12
+    month = month_index % 12 + 1
+    days_in_month = [31, 29 if (year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)) else 28,
+                      31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    day = min(target_day, days_in_month[month - 1])
+    return date(year, month, day)
+
+
+# ── Expense Log access ──────────────────────────────────────────────────────
+def _get_next_expense_id():
+    """Scan the Expense Log for the highest existing EXP-#### suffix and
+    return the next one -- same sequential-numbering idea as
+    generate_next_sku(), just scoped to this tab's own ID column."""
+    ws = connect_to_expense_log_sheet()
+    values = ws.get_all_values()
+    serials = []
+    for row in values[1:]:
+        if not row or not row[0].strip():
+            continue
+        m = re.match(r"EXP-(\d+)$", row[0].strip())
+        if m:
+            serials.append(int(m.group(1)))
+    next_serial = max(serials) + 1 if serials else 1
+    return f"EXP-{next_serial:04d}"
+
+
+def _latest_expense_id_for_series(series_id):
+    """Among all Expense Log rows carrying this Recurring Series ID, return
+    the one with the highest EXP-#### serial -- i.e. whichever instance was
+    created last. Used to decide "is this the most recent logged instance
+    of the series" for the Amount/Type registry-sync prompt (UAT finding,
+    Section 12): Expense IDs are assigned once at creation and never
+    change, so this can't be disturbed by editing any other field on the
+    row, unlike comparing against a mutable Date."""
+    ws = connect_to_expense_log_sheet()
+    values = ws.get_all_values()
+    best_id, best_serial = None, -1
+    for row in values[1:]:
+        if len(row) < 9 or not row[0].strip() or row[8].strip() != series_id:
+            continue
+        m = re.match(r"EXP-(\d+)$", row[0].strip())
+        if m and int(m.group(1)) > best_serial:
+            best_serial = int(m.group(1))
+            best_id = row[0].strip()
+    return best_id
+
+
+def _append_expense_log_row(expense_id, expense_date, exp_type, category,
+                             subcategory, amount, description, recurring, series_id=None):
+    ws = connect_to_expense_log_sheet()
+    next_row = len(ws.get_all_values()) + 1
+    row = [
+        expense_id,
+        expense_date.strftime("%m-%d-%Y"),
+        exp_type,
+        category,
+        _sheet_safe(subcategory),
+        amount,
+        _sheet_safe(description or ""),
+        "Yes" if recurring else "No",
+        series_id or "",
+    ]
+    ws.update(range_name=f"A{next_row}:I{next_row}", values=[row], value_input_option="USER_ENTERED")
+
+
+def _find_expense_log_row(expense_id):
+    """Return the 1-based sheet row number for the given Expense ID, or None.
+    Case-insensitive, same reasoning as find_row_index_by_sku()."""
+    ws = connect_to_expense_log_sheet()
+    values = ws.get_all_values()
+    target = expense_id.strip().upper()
+    for i, row in enumerate(values):
+        if i == 0:
+            continue
+        if row and row[0].strip().upper() == target:
+            return i + 1
+    return None
+
+
+def _get_expense_log_row(sheet_row_number):
+    ws = connect_to_expense_log_sheet()
+    values = ws.row_values(sheet_row_number)
+    values = values + [""] * (len(_EXPENSE_LOG_HEADERS) - len(values))
+    return dict(zip(_EXPENSE_LOG_HEADERS, values))
+
+
+def _get_recent_expense_rows(limit=20):
+    """Last `limit` logged expenses, most recent first, each tagged with
+    its sheet row -- the browse path for the Edit flow, since Expense ID
+    isn't something anyone will realistically remember.
+    limit=None returns every logged expense, still newest first -- the
+    search path in _find_expense_to_edit() needs the full log, not just
+    the recent window (UAT finding, Section 12: the recent-only cap meant
+    anything older became reachable only by an ID nobody would remember)."""
+    ws = connect_to_expense_log_sheet()
+    values = ws.get_all_values()
+    rows = []
+    for i, row in enumerate(values[1:], start=2):
+        if not row or not row[0].strip():
+            continue
+        row = row + [""] * (len(_EXPENSE_LOG_HEADERS) - len(row))
+        d = dict(zip(_EXPENSE_LOG_HEADERS, row))
+        d["_sheet_row"] = i
+        rows.append(d)
+    ordered = rows[::-1]
+    return ordered if limit is None else ordered[:limit]
+
+
+_EXPENSE_LOG_FIELD_COLUMN = {
+    "Date": "B", "Type": "C", "Category": "D", "Subcategory": "E",
+    "Amount (USD)": "F", "Description": "G",
+}
+
+
+def _update_expense_log_fields(sheet_row_number, updates):
+    """Batched multi-field write -- updates: dict mapping field name (an
+    _EXPENSE_LOG_FIELD_COLUMN key) to new value. Sends every field as one
+    gspread update_cells() call rather than one request per field, same
+    reasoning as update_row() on the main inventory sheet (UAT finding,
+    Section 12): a transient failure here can never leave the row
+    half-updated across a multi-field edit -- either the whole batch
+    lands, or none of it does."""
+    ws = connect_to_expense_log_sheet()
+    cells = []
+    for field, value in updates.items():
+        col_letter = _EXPENSE_LOG_FIELD_COLUMN[field]
+        col_idx = ord(col_letter) - ord('A') + 1
+        cells.append(gspread.Cell(row=sheet_row_number, col=col_idx, value=_sheet_safe(value)))
+    if cells:
+        ws.update_cells(cells, value_input_option="USER_ENTERED")
+
+
+# ── Expense Subcategories access ────────────────────────────────────────────
+def _get_expense_subcategories():
+    """Return {category: [subcategory, ...]} from the reference tab,
+    skipping its 3 header rows (same convention as Category Code)."""
+    ws = connect_to_expense_subcategories_sheet()
+    values = ws.get_all_values()
+    by_category = {cat: [] for cat in EXPENSE_CATEGORIES}
+    for row in values[3:]:
+        if len(row) < 3 or not row[1].strip() or not row[2].strip():
+            continue
+        by_category.setdefault(row[1].strip(), []).append(row[2].strip())
+    return by_category
+
+
+def _add_expense_subcategory(category, subcategory):
+    """Append a newly confirmed subcategory to the reference tab -- only the
+    first occurrence of any given expense type is ever free text; every
+    repeat after this is a clean selection.
+
+    Checks first for an existing row under this category with a blank
+    Subcategory cell -- the placeholder seeded for a category that started
+    with zero subcategories (Professional & Legal is the one case on this
+    sheet) -- and fills that cell in place instead. UAT finding: appending
+    unconditionally left that placeholder permanently blank and created a
+    second, duplicate row for the category every time its first-ever
+    subcategory got added, rather than using the slot already reserved
+    for exactly this.
+
+    The category match is case-insensitive and whitespace-tolerant on both
+    sides (.strip().casefold()) -- the live sheet's rows were seeded by
+    hand, not generated from EXPENSE_CATEGORIES, so nothing guarantees an
+    exact byte-for-byte match going forward even though today's actual
+    values happen to line up exactly."""
+    ws = connect_to_expense_subcategories_sheet()
+    values = ws.get_all_values()
+    target = category.strip().casefold()
+    for i, row in enumerate(values[3:], start=4):
+        if len(row) >= 2 and row[1].strip().casefold() == target and (len(row) < 3 or not row[2].strip()):
+            ws.update(range_name=f"C{i}", values=[[_sheet_safe(subcategory)]], value_input_option="USER_ENTERED")
+            return
+    next_row = len(values) + 1
+    ws.update(range_name=f"B{next_row}:C{next_row}",
+              values=[[category, _sheet_safe(subcategory)]], value_input_option="USER_ENTERED")
+
+
+def _commit_new_subcategory(category, subcategory, is_new):
+    """UAT finding (Manage_Expenses_Operation_Scope.md Section 11): a new
+    subcategory used to get written to the reference tab the moment it was
+    confirmed, independent of whether the expense entry itself ended up
+    being saved -- every abandoned entry left a permanent orphan on the
+    exact list the dedup mechanism exists to keep clean. Same bug class as
+    the Edit-flow premature-write fix. Callers now hold (subcategory,
+    is_new) in memory and call this only once their own final confirmation
+    ("Log this expense?" / "Save this change?") has actually passed."""
+    if is_new:
+        _add_expense_subcategory(category, subcategory)
+        print(f"\n\033[38;5;202m✓ Added '{subcategory}' as a new subcategory under {category}.\033[0m")
+
+
+# ── Recurring Expense Registry access ───────────────────────────────────────
+def _get_next_registry_id():
+    """Same sequential-numbering idea as _get_next_expense_id(), scoped to
+    the registry's own ID column."""
+    ws = connect_to_recurring_registry_sheet()
+    values = ws.get_all_values()
+    serials = []
+    for row in values[1:]:
+        if not row or not row[0].strip():
+            continue
+        m = re.match(r"REG-(\d+)$", row[0].strip())
+        if m:
+            serials.append(int(m.group(1)))
+    next_serial = max(serials) + 1 if serials else 1
+    return f"REG-{next_serial:04d}"
+
+
+def _get_recurring_registry_rows():
+    ws = connect_to_recurring_registry_sheet()
+    values = ws.get_all_values()
+    rows = []
+    for i, row in enumerate(values[1:], start=2):
+        if not any(c.strip() for c in row):
+            continue
+        row = row + [""] * (len(_REGISTRY_HEADERS) - len(row))
+        d = dict(zip(_REGISTRY_HEADERS, row))
+        d["_sheet_row"] = i
+        rows.append(d)
+    return rows
+
+
+def _append_recurring_registry_row(category, subcategory, description, exp_type,
+                                    amount, cadence_months, logged_date):
+    """Returns the new row's Registry ID, so the caller can stamp it onto
+    the corresponding Expense Log row as the robust link between them.
+
+    Billing Day captures logged_date's day-of-month permanently at creation
+    -- the anchor _registry_expected_date() re-targets every cycle (UAT
+    finding, Section 12), so a series first logged on the 31st keeps
+    re-attempting the 31st after a short month forces a one-time clamp,
+    instead of drifting onto the clamped day permanently."""
+    ws = connect_to_recurring_registry_sheet()
+    registry_id = _get_next_registry_id()
+    next_row = len(ws.get_all_values()) + 1
+    row = [
+        registry_id, category, _sheet_safe(subcategory), _sheet_safe(description or ""), exp_type,
+        amount, cadence_months, logged_date.strftime("%m-%d-%Y"),
+        logged_date.strftime("%m-%d-%Y"), "Yes", logged_date.day,
+    ]
+    ws.update(range_name=f"A{next_row}:K{next_row}", values=[row], value_input_option="USER_ENTERED")
+    return registry_id
+
+
+# Column indices (1-based) for the registry's layout -- see _REGISTRY_HEADERS.
+_REGISTRY_COL = {"Category": 2, "Subcategory": 3, "Description": 4, "Type": 5,
+                  "Last Amount": 6, "Last Logged Date": 8,
+                  "Last Reviewed Date": 9, "Active (Y/N)": 10}
+
+
+def _update_recurring_registry_row(sheet_row, last_amount=None, last_logged_date=None,
+                                    last_reviewed_date=None, exp_type=None, active=None,
+                                    category=None, subcategory=None, description=None):
+    """Last Amount and Last Logged Date are updated together whenever a
+    sweep confirmation logs a new instance -- never just the date (an
+    adjusted amount that never gets written back would leave the next
+    sweep suggesting a stale number forever).
+
+    Last Reviewed Date is a separate field from Last Logged Date, by
+    design (UAT finding, Section 11): Skip only ever touches this one,
+    advancing when the series gets asked about again without falsely
+    implying a payment was logged. Confirming updates both together.
+
+    exp_type lets an Edit-flow Type change stay in sync with the registry
+    too, the same explicit-prompt pattern already used for Amount --
+    previously unhandled entirely (a second UAT finding, Section 11).
+
+    category/subcategory/description extend that same explicit-prompt
+    sync pattern to the remaining editable fields (UAT finding, Section
+    12/D-405): without this, correcting a miscategorized recurring
+    series on its latest instance never propagated forward, so every
+    future sweep-created entry kept recreating the old, wrong
+    Category/Subcategory/Description indefinitely."""
+    ws = connect_to_recurring_registry_sheet()
+    cells = []
+    if category is not None:
+        cells.append(gspread.Cell(row=sheet_row, col=_REGISTRY_COL["Category"], value=category))
+    if subcategory is not None:
+        cells.append(gspread.Cell(row=sheet_row, col=_REGISTRY_COL["Subcategory"], value=_sheet_safe(subcategory)))
+    if description is not None:
+        cells.append(gspread.Cell(row=sheet_row, col=_REGISTRY_COL["Description"], value=_sheet_safe(description)))
+    if last_amount is not None:
+        cells.append(gspread.Cell(row=sheet_row, col=_REGISTRY_COL["Last Amount"], value=last_amount))
+    if last_logged_date is not None:
+        cells.append(gspread.Cell(row=sheet_row, col=_REGISTRY_COL["Last Logged Date"],
+                                   value=last_logged_date.strftime("%m-%d-%Y")))
+    if last_reviewed_date is not None:
+        cells.append(gspread.Cell(row=sheet_row, col=_REGISTRY_COL["Last Reviewed Date"],
+                                   value=last_reviewed_date.strftime("%m-%d-%Y")))
+    if exp_type is not None:
+        cells.append(gspread.Cell(row=sheet_row, col=_REGISTRY_COL["Type"], value=exp_type))
+    if active is not None:
+        cells.append(gspread.Cell(row=sheet_row, col=_REGISTRY_COL["Active (Y/N)"],
+                                   value="Yes" if active else "No"))
+    if cells:
+        ws.update_cells(cells, value_input_option="USER_ENTERED")
+
+
+# ── Type / Category / Subcategory selection ─────────────────────────────────
+def _select_expense_type():
+    choice = questionary.select(
+        "",
+        choices=[
+            questionary.Choice(title=[("class:choice-label", "Operating Expense"),
+                                       ("", " -- used up (ads, packaging, subscriptions)")],
+                                value="Operating Expense"),
+            questionary.Choice(title=[("class:choice-label", "Capital Expenditure"),
+                                       ("", " -- still works, only replaced eventually from wear")],
+                                value="Capital Expenditure"),
+            questionary.Separator(" "),
+            _back_choice(),
+        ],
+        qmark="\nQuick test: after one use -- used up, or does it still work?",
+        instruction=" ",
+        style=_MENU_STYLE,
+    ).unsafe_ask()
+    return None if choice in (None, "Back") else choice
+
+
+def _select_expense_category():
+    # Sorted for display only -- EXPENSE_CATEGORIES itself keeps its
+    # original (audit-order) sequence as the source of truth, same
+    # treatment Finding 23 already gave the subcategory picker, for
+    # consistency between the two pickers in the same flow (UAT finding,
+    # Section 12).
+    choice = questionary.select(
+        "",
+        choices=sorted(EXPENSE_CATEGORIES, key=str.lower) + [
+            questionary.Separator(" "),
+            _back_choice(),
+        ],
+        qmark="\nSelect category:",
+        instruction=" ",
+        style=_MENU_STYLE,
+    ).unsafe_ask()
+    return None if choice in (None, "Back") else choice
+
+
+def _find_cross_category_subcategory_matches(raw, category, existing_by_category):
+    """Scans every OTHER category's subcategory list for a close match to
+    raw -- same bidirectional-substring-then-fuzzy logic as the
+    same-category check in _add_new_expense_subcategory(), just scoped to
+    everything OUTSIDE the chosen category instead of inside it. Returns a
+    list of (other_category, matched_subcategory) pairs, empty if nothing
+    close exists elsewhere."""
+    raw_lower = raw.lower()
+    others = [(oc, s) for oc, subs in existing_by_category.items() if oc != category for s in subs]
+
+    substring_hits = [(oc, s) for oc, s in others
+                       if raw_lower in s.lower() or (len(s) >= _MIN_DEDUP_MATCH_LEN and s.lower() in raw_lower)]
+    if substring_hits:
+        return substring_hits
+
+    fuzzy_names = set(difflib.get_close_matches(raw, [s for _, s in others], n=3, cutoff=0.52))
+    return [(oc, s) for oc, s in others if s in fuzzy_names]
+
+
+def _add_new_expense_subcategory(category, existing, existing_by_category):
+    """Type-first, fuzzy-match second -- same order and the same two-layer
+    check (substring, then difflib) as select_or_add_weave_type(), with two
+    deliberate deviations (UAT finding, Section 12: the docstring used to
+    claim only one):
+
+    1. A more sensitive difflib cutoff (0.52 vs. the 0.6 default), since a
+       missed near-duplicate here quietly fragments any future
+       category-level total, not just a cosmetic annoyance.
+    2. The substring check is bidirectional (raw-in-existing OR
+       existing-in-raw), not just raw-in-existing like the weave-type
+       precedent. Expense subcategories are prone to a different kind of
+       near-duplicate than weave types: someone typing a longer, padded
+       version of an existing name ("Monthly Shopify Subscription Payment"
+       for an existing "Shopify Subscription"), which a one-directional
+       check wouldn't catch at all.
+
+    existing_by_category is the full {category: [subcategories]} map, used
+    only for the cross-category awareness check at the very end (UAT
+    finding, Section 12): a subcategory confirmed genuinely new within its
+    own category could still be a near-duplicate of something already
+    registered under a DIFFERENT category, invisible to every check above
+    since those are all scoped to `existing` (this category only). That
+    matters more than ordinary subcategory fragmentation -- Category
+    totals feed Operating Margin/CapEx reporting directly, so a
+    misclassified entry skews two categories' real dollar totals, not
+    just a messy subcategory list. Informational only, never a redirect
+    the way the same-category match above is: Category was already locked
+    in by an earlier, separate step, so declining re-prompts for a new
+    name here rather than silently switching categories out from under
+    the operator.
+
+    Returns (subcategory, is_new) -- does NOT write to the reference tab
+    itself. That write is deferred to _commit_new_subcategory(), called by
+    the caller only after its own final confirmation passes (UAT finding,
+    Section 11: writing here unconditionally left an orphan subcategory
+    behind every time an entry was typed and then abandoned)."""
+    examples = existing[:2] if len(existing) >= 2 else ["Ad Spend (Instagram/Meta)", "Exhibition Booth Rental"]
+    while True:
+        # ask_long_text(), not ask_text() (UAT finding, Section 12): this
+        # prompt's own text runs 119 characters -- long enough to wrap
+        # onto a second terminal row before the operator even starts
+        # typing, and combined with a long typed answer plus this loop's
+        # own retry (_warn() printing in between), that triggered a real,
+        # confirmed display bug: readline's redraw miscalculating cursor
+        # position across the re-painted multi-row prompt+input, so new
+        # characters overwrote the middle of the prompt text instead of
+        # extending onto a fresh line. No data was ever lost (the
+        # character count shown in the warning was always correct) -- this
+        # was a redisplay bug, not a capture bug. ask_long_text() doesn't
+        # use readline's line-editing at all; prompt_toolkit manages its
+        # own screen buffer and redraws the whole block fresh each time,
+        # which removes the specific component responsible for the
+        # corruption rather than working around one trigger for it.
+        # Already returns a non-blank, whitespace-collapsed string, so
+        # neither check from the old ask_text()-based version is needed
+        # here anymore.
+        raw = ask_long_text(
+            f"What's this expense? Keep it short and specific, like "
+            f'"{examples[0]}" or "{examples[1]}":',
+            blank_message="This field cannot be left blank. Please enter a value.",
+        )
+        if len(raw) > 60:
+            _warn(f"That's {len(raw)} characters -- please keep it under 60. Try trimming it down.")
+            continue
+        break
+
+    if raw in existing:
+        _warn(f"'{raw}' already exists under {category}. Please select it from the list.")
+        return raw, False
+
+    raw_lower = raw.lower()
+    substring_matches = [s for s in existing
+                          if raw_lower in s.lower() or (len(s) >= _MIN_DEDUP_MATCH_LEN and s.lower() in raw_lower)]
+    matches = substring_matches if substring_matches else difflib.get_close_matches(raw, existing, n=3, cutoff=0.52)
+
+    if len(matches) == 1:
+        print(f"\n\033[1mThis looks similar to an existing subcategory:\033[0m {matches[0]}")
+        if ask_yes_no(f"Use '{matches[0]}' instead?"):
+            return matches[0], False
+        # declined -- proceed as genuinely new
+
+    elif len(matches) > 1:
+        pick = questionary.select(
+            "",
+            choices=matches + [
+                questionary.Separator("─" * 44),
+                questionary.Choice(
+                    title=[("class:register-option", "+ None of these — add as new")],
+                    value="__NONE__",
+                ),
+            ],
+            qmark="\nThis looks similar to a few existing subcategories -- did you mean one of these?",
+            instruction=" ",
+            style=_MENU_STYLE,
+        ).unsafe_ask()
+        if pick != "__NONE__":
+            return pick, False
+        # "none of these" -- proceed as genuinely new
+
+    else:
+        print("\nNo existing subcategory matches that name.")
+
+    cross_matches = _find_cross_category_subcategory_matches(raw, category, existing_by_category)
+    if cross_matches:
+        # Bold, not _warn()-style -- matches the established convention for
+        # every other "did you mean" message in this file (the same-category
+        # check just above, and both select_or_add_weave_type()'s and
+        # select_or_add_supplier()'s "Close match found:"). This is a
+        # suggestion, not an error condition, same as those three; the
+        # amber/warning-glyph styling this originally shipped with was a
+        # one-off inconsistency, not a deliberate severity signal.
+        print(f"\n\033[1mThis looks similar to a subcategory registered under a different category:\033[0m")
+        for oc, s in cross_matches:
+            print(f"  {s} -- under {oc}")
+        if not ask_yes_no(f"Continue adding '{raw}' under {category} anyway?"):
+            return _add_new_expense_subcategory(category, existing, existing_by_category)
+
+    # Acknowledges the decline before the caller moves straight on to the
+    # next field (Amount) -- every path above that reaches here (declined
+    # the single-match suggestion, picked "none of these" from a
+    # multi-match list, no match at all, or proceeded past a
+    # cross-category heads-up) converges on this one return with nothing
+    # confirming the typed name was actually accepted as new. Same gap,
+    # same fix as select_or_add_weave_type()'s "Proceeding to register:"
+    # (UAT finding, Section 12).
+    print(f"\n\033[1mProceeding to register:\033[0m \033[38;5;214;1m{raw}\033[0m")
+    return raw, True
+
+
+def _select_or_add_expense_subcategory(category, existing_by_category):
+    """Returns (subcategory, is_new) or (None, False) on Back -- is_new
+    tells the caller whether _commit_new_subcategory() still needs to run
+    once its own confirmation passes.
+
+    No narrowing search step, unlike weave type/supplier/customer search
+    -- those grow unbounded as real business entities (new products,
+    vendors, customers), but expense subcategories live under a fixed,
+    9-category taxonomy that barely moves: 3 is the current max in any
+    one category, confirmed against the live reference tab (UAT finding,
+    Section 12, full Op9 audit). A search step added for a threshold that
+    realistically never fires is complexity with nothing behind it, not a
+    safety net -- removed rather than kept dormant. `existing` is what
+    _add_new_expense_subcategory() needs for same-category dedup."""
+    existing = sorted(existing_by_category.get(category, []), key=str.lower)
+
+    choice = questionary.select(
+        "",
+        choices=existing + [
+            questionary.Separator("─" * 44),
+            questionary.Choice(
+                title=[("class:register-option", "+ Add new subcategory")],
+                value="Add new subcategory",
+            ),
+            questionary.Separator(" "),
+            _back_choice(),
+        ],
+        qmark=f"\nSelect subcategory under {category}:",
+        instruction=" ",
+        style=_MENU_STYLE,
+    ).unsafe_ask()
+    if choice in (None, "Back"):
+        return None, False
+    if choice != "Add new subcategory":
+        return choice, False
+    return _add_new_expense_subcategory(category, existing, existing_by_category)
+
+
+# ── Log a new expense ────────────────────────────────────────────────────────
+def _log_new_expense():
+    print("\n--- \033[1;38;5;124mLOG A NEW EXPENSE\033[0m ---")
+
+    exp_type = _select_expense_type()
+    if exp_type is None:
+        return
+
+    category = _select_expense_category()
+    if category is None:
+        return
+
+    subcategory, subcategory_is_new = _select_or_add_expense_subcategory(category, _get_expense_subcategories())
+    if subcategory is None:
+        return
+
+    amount = round(ask_number("Amount (USD):"), 2)
+    expense_date = ask_date("Date", not_future=True)
+    description = ask_text("Description/vendor:")
+
+    recurring = ask_yes_no("Is this a recurring expense?")
+    cadence_months = None
+    if recurring:
+        # Whole months only -- _registry_expected_date()'s month-stepping only
+        # ever supports integer cadences. Parses the raw string directly
+        # (same pattern as the other whole-number-only prompts, e.g. batch
+        # size at line ~3328) rather than routing through ask_number() and
+        # truncating the result -- that silently turned "1.5" into "1" with
+        # no warning (UAT finding, Section 12).
+        while True:
+            raw = input(f"\n\001\033[1m\002Repeats every how many months "
+                        f"(1 = monthly, 3 = quarterly, 12 = yearly)?\001\033[0m\002 {_ANSWER_COLOR}").strip()
+            print("\033[0m", end="")
+            try:
+                cadence_months = int(raw)
+                if cadence_months < 1:
+                    _warn("Please enter a number of 1 or more.")
+                    continue
+                break
+            except ValueError:
+                _warn("Please enter a valid whole number.")
+
+    summary_rows = [
+        f"  \033[1m{'Type:':<16}\033[0m{exp_type}",
+        f"  \033[1m{'Category:':<16}\033[0m{category}",
+        f"  \033[1m{'Subcategory:':<16}\033[0m{subcategory}",
+        f"  \033[1m{'Amount:':<16}\033[0m${amount:,.2f}",
+        f"  \033[1m{'Date:':<16}\033[0m{expense_date.strftime('%m-%d-%Y')}",
+        f"  \033[1m{'Description:':<16}\033[0m{description}",
+    ]
+    if recurring:
+        # References the actual entered date, not a hardcoded "today" --
+        # UAT finding (Section 11): the old copy said "starting today"
+        # unconditionally, which was simply wrong for a backdated first
+        # entry even though the stored date itself was always correct.
+        summary_rows.append(
+            f"  \033[1m{'Recurring:':<16}\033[0mYes -- every {cadence_months} "
+            f"month{'s' if cadence_months != 1 else ''}, starting {expense_date.strftime('%m-%d-%Y')}"
+        )
+    _print_boxed("EXPENSE SUMMARY", [("EXPENSE", summary_rows)])
+
+    if not ask_yes_no("Log this expense?"):
+        print("\nDiscarded. Returning to Manage Expenses.")
+        return
+
+    _commit_new_subcategory(category, subcategory, subcategory_is_new)
+
+    series_id = None
+    if recurring:
+        series_id = _append_recurring_registry_row(category, subcategory, description,
+                                                     exp_type, amount, cadence_months, expense_date)
+
+    expense_id = _get_next_expense_id()
+    _append_expense_log_row(expense_id, expense_date, exp_type, category,
+                             subcategory, amount, description, recurring, series_id)
+
+    print(f"\n\033[38;5;202m✓ Logged {expense_id}: ${amount:,.2f} under {category} -- {subcategory}.\033[0m")
+
+    if ask_yes_no("Log another expense?"):
+        return _log_new_expense()
+    # Declining here means the operator is genuinely done, not just
+    # correcting a mistake -- unlike every earlier return in this function
+    # (backing out mid-entry, declining the initial save), which still
+    # drops back to Operation 9's own menu for a quick retry. manage_
+    # expenses() checks this return value to skip straight to the Main
+    # Menu instead of re-showing "How would you like to proceed?" for a
+    # choice the operator already just answered "no" to.
+    print("\nReturning to Main Menu.")
+    return True
+
+
+# ── Recurring-expense due-for-review sweep ──────────────────────────────────
+def _registry_expected_date(r):
+    """The date a series is next due: Last Reviewed Date + Cadence, falling
+    back to Last Logged Date for a row that predates the Last Reviewed Date
+    column existing at all. Deliberately NOT based on Last Logged Date once
+    that fallback isn't needed -- see Section 11's Skip fix below.
+
+    Re-anchored to Billing Day every cycle (UAT finding, Section 12) --
+    without this, a series first logged on the 31st would permanently
+    drift onto whatever day one short month happened to clamp it to,
+    instead of re-attempting the 31st every time a long-enough month comes
+    around, which is how real subscription billing actually works. Falls
+    back to Last Reviewed Date's own day for a row that predates the
+    Billing Day column existing at all -- same fallback pattern as above."""
+    last_reviewed = _parse_mmddyyyy(r.get("Last Reviewed Date", "")) or _parse_mmddyyyy(r.get("Last Logged Date", ""))
+    try:
+        cadence = int((r.get("Cadence (Months)") or "0").strip())
+    except ValueError:
+        cadence = 0
+    try:
+        billing_day = int((r.get("Billing Day") or "0").strip())
+    except ValueError:
+        billing_day = 0
+    if not last_reviewed or cadence <= 0:
+        return None
+    return _add_months(last_reviewed, cadence, anchor_day=billing_day or last_reviewed.day)
+
+
+def _recurring_expense_sweep():
+    """Runs at the top of Manage Expenses, same pattern as cancel_sale()'s
+    pending-refund sweep. Never bulk-confirms -- each due item gets its own
+    full review, since a bulk "confirm all" would reintroduce exactly the
+    silent-black-box risk this design exists to avoid.
+
+    Two UAT findings fixed here (Section 11): Skip now advances a separate
+    "Last Reviewed Date" field instead of doing nothing, so a skipped item
+    no longer resurfaces on literally every future sweep forever -- Last
+    Logged Date stays untouched, reserved for when a payment actually gets
+    logged. And a series overdue by several periods is now caught up one
+    period at a time within this same sweep (the inner while loop below),
+    each with its own full review, rather than surfacing only one instance
+    per Operation 9 visit.
+
+    "Review the rest later" (and Esc/Ctrl-C) exits the sweep entirely
+    rather than just the current item -- unlike Skip, it writes nothing,
+    so every remaining due item resurfaces unchanged next time. Without
+    this, reaching Operation 9's own menu required fully actioning every
+    overdue series first, with no way to defer and come back (UAT
+    finding, Section 12)."""
+    today = date.today()
+    due_ids = []
+    for r in _get_recurring_registry_rows():
+        if r.get("Active (Y/N)", "").strip() != "Yes":
+            continue
+        expected_date = _registry_expected_date(r)
+        if expected_date is not None and today >= expected_date:
+            due_ids.append(r["Registry ID"])
+
+    if not due_ids:
+        return
+
+    print(f"\n\033[33m⚠  {len(due_ids)} recurring expense{'s are' if len(due_ids) != 1 else ' is'} due for review:\033[0m")
+
+    for registry_id in due_ids:
+        while True:
+            r = next((row for row in _get_recurring_registry_rows()
+                       if row["Registry ID"] == registry_id
+                       and row.get("Active (Y/N)", "").strip() == "Yes"), None)
+            if r is None:
+                break  # stopped tracking partway through this series' catch-up
+
+            expected_date = _registry_expected_date(r)
+            if expected_date is None or today < expected_date:
+                break  # caught up
+
+            category, subcategory = r["Category"], r["Subcategory"]
+            last_amount = _sheet_float(r.get("Last Amount"))
+
+            print("\n--- \033[1;38;5;124mRECURRING EXPENSE DUE\033[0m ---")
+            _print_boxed("DUE FOR REVIEW", [("EXPENSE", [
+                f"  \033[1m{'Category:':<18}\033[0m{category}",
+                f"  \033[1m{'Subcategory:':<18}\033[0m{subcategory}",
+                f"  \033[1m{'Suggested Amount:':<18}\033[0m${last_amount:,.2f}",
+                f"  \033[1m{'Suggested Date:':<18}\033[0m{expected_date.strftime('%m-%d-%Y')}",
+            ])])
+
+            action = questionary.select(
+                "",
+                choices=[
+                    f"Confirm at ${last_amount:,.2f}",
+                    "Adjust the amount for this period",
+                    "Skip just this period",
+                    "Stop tracking this as recurring",
+                    questionary.Separator(" "),
+                    _back_choice("Review the rest later"),
+                ],
+                qmark="\nHow would you like to handle this recurring expense?",
+                instruction=" ",
+                style=_MENU_STYLE,
+            ).unsafe_ask()
+
+            # Leaves the whole sweep, not just this item's catch-up loop --
+            # nothing is written, so every remaining due item (including
+            # this one, if it's mid multi-period catch-up) resurfaces
+            # unchanged on the next sweep. Esc/Ctrl-C (action is None) gets
+            # the same treatment: it used to fall through to the *next*
+            # due item instead of actually exiting, forcing a full review
+            # of every overdue series before Operation 9's own menu was
+            # even reachable (UAT finding, Section 12).
+            if action is None or action == "Review the rest later":
+                return
+            if action == "Stop tracking this as recurring":
+                _update_recurring_registry_row(r["_sheet_row"], active=False)
+                print(f"\n\033[38;5;202m✓ Stopped tracking {subcategory} as recurring.\033[0m")
+                break
+            if action == "Skip just this period":
+                _update_recurring_registry_row(r["_sheet_row"], last_reviewed_date=expected_date)
+                continue  # re-checks on the next loop pass -- catches up further overdue periods
+
+            amount = round(ask_number("New amount for this period (USD):"), 2) \
+                if action == "Adjust the amount for this period" else last_amount
+
+            expense_id = _get_next_expense_id()
+            _append_expense_log_row(expense_id, expected_date, r["Type"], category,
+                                     subcategory, amount, r.get("Description", ""), True,
+                                     series_id=registry_id)
+            _update_recurring_registry_row(r["_sheet_row"], last_amount=amount,
+                                            last_logged_date=expected_date,
+                                            last_reviewed_date=expected_date)
+            print(f"\n\033[38;5;202m✓ Logged {expense_id}: ${amount:,.2f} under {category} -- {subcategory}.\033[0m")
+
+
+# ── Edit an existing expense ─────────────────────────────────────────────────
+def _search_expense_rows(query):
+    """Every logged expense whose Category, Subcategory, or Description
+    contains query (case-insensitive substring), newest first. Deliberately
+    not matched against Amount or Date -- a numeric query would be
+    ambiguous between those and a partial Expense ID (UAT finding, Section
+    12 -- scoped out explicitly, matching search_and_select_customer()'s
+    single-field precedent rather than inventing broader matching)."""
+    q = query.lower()
+    return [r for r in _get_recent_expense_rows(limit=None)
+            if q in r["Category"].lower() or q in r["Subcategory"].lower()
+            or q in r["Description"].lower()]
+
+
+def _select_expense_from_matches(matches, header):
+    """Shared picker for both the recent-browse and search-match paths.
+
+    Column order is ID / Date / Amount / Category / Subcategory --
+    deliberately Amount before the two free-text columns, not after, so
+    that when a line does run out of room on a narrow terminal, it's
+    Subcategory that absorbs the clipping (which already has an ellipsis
+    affordance telling you text is missing), not Amount, which has none
+    and matters more for confirming this is the right expense (UAT
+    finding, Section 12, following your coworking space's suggestion).
+
+    Category/Subcategory are clipped via the existing _clip() helper to a
+    width computed from the real terminal (shutil.get_terminal_size()),
+    not a flat guess -- a fixed 24-char guess, tried first, still
+    overflowed on a genuinely narrow terminal while wasting space on a
+    wide one. Without any clipping at all, Category alone can run to 34
+    characters and Subcategory is free text with no bound ("Content Tools
+    (Loom Headlights, Microphones)" is 45) -- together, confirmed via a
+    real PTY capture, that hard-truncates mid-word and pushes Amount
+    off-screen entirely with no indication anything was missing.
+
+    Leads with a bold column-header row (a Separator, not a selectable
+    Choice) -- matching the IMS's static review tables' own bold-header
+    convention. A Separator can't carry per-instance styling (confirmed
+    live: raw ANSI bold codes embedded directly in its title render as
+    literal escape-character garbage, not formatting), so the bold comes
+    from _EXPENSE_LIST_HEADER_STYLE instead -- a merge onto _MENU_STYLE
+    that defines "separator" as bold, scoped to just this call rather than
+    restyling every other divider in the file that also renders through
+    that same style class (confirmed by a direct screenshot that the
+    header was otherwise indistinguishable from the actual choices below
+    it). Returns a sheet row number, '__SEARCH__' (search again), or None
+    (back)."""
+    id_w   = max([len(r["Expense ID"]) for r in matches] + [len("Expense ID")])
+    date_w = max([len(r["Date"]) for r in matches] + [len("Date")])
+    amounts = [f"${_sheet_float(r['Amount (USD)']):,.2f}" for r in matches]
+    amount_w = max([len(a) for a in amounts] + [len("Amount")])
+
+    term_width = shutil.get_terminal_size(fallback=(_EXPENSE_LIST_FALLBACK_TERM_WIDTH, 24)).columns
+    # Reserve the pointer/indent margin, the three effectively-fixed-width
+    # columns, and the 4 two-space gaps between all 5 columns -- whatever's
+    # left is split between Category and Subcategory, the only two fields
+    # with no natural bound.
+    reserved = 4 + id_w + date_w + amount_w + (4 * 2)
+    available = max(term_width - reserved, _EXPENSE_LIST_MIN_FIELD_WIDTH * 2)
+    cat_budget = max(available // 2, _EXPENSE_LIST_MIN_FIELD_WIDTH)
+    sub_budget = max(available - cat_budget, _EXPENSE_LIST_MIN_FIELD_WIDTH)
+
+    cats = [_clip(r["Category"], cat_budget) for r in matches]
+    subs = [_clip(r["Subcategory"], sub_budget) for r in matches]
+    cat_w = max([len(c) for c in cats] + [len("Category")])
+
+    header_row = questionary.Separator(
+        f"{'Expense ID':<{id_w}}  {'Date':<{date_w}}  {'Amount':<{amount_w}}  "
+        f"{'Category':<{cat_w}}  Subcategory"
+    )
+    choice = questionary.select(
+        "",
+        choices=[header_row] + [
+            questionary.Choice(
+                title=(f"{r['Expense ID']:<{id_w}}  {r['Date']:<{date_w}}  "
+                       f"{amounts[i]:<{amount_w}}  {cats[i]:<{cat_w}}  {subs[i]}"),
+                value=r["_sheet_row"],
+            ) for i, r in enumerate(matches)
+        ] + [
+            questionary.Separator(" "),
+            questionary.Choice(title="↩ Search again", value="__SEARCH__"),
+            _back_choice(),
+        ],
+        qmark=f"\nSelect an expense to edit ({header}):",
+        instruction=" ",
+        style=_EXPENSE_LIST_HEADER_STYLE,
+    ).unsafe_ask()
+    return None if choice in (None, "Back") else choice
+
+
+def _find_expense_to_edit():
+    """Three ways in: an exact Expense ID (case-insensitive, unchanged from
+    before, and always takes priority over search); free text, treated as
+    an uncapped search against Category, Subcategory, and Description
+    across every logged expense, not just the recent window -- however
+    many match, all of them show (UAT finding, Section 12, full Op9
+    audit: a result cap here doesn't protect against anything real, since
+    arrow-key scrolling already reaches every match regardless of count,
+    and unlike the subcategory picker this list is genuinely open-ended --
+    a transaction log that grows for as long as the business operates, not
+    a fixed taxonomy); or blank, which deliberately browses only the most
+    recent _EXPENSE_SEARCH_RESULT_CAP -- a recency-browse default, not an
+    overflow cap, so it stays. Mirrors search_and_select_customer()'s
+    search/no-match/search-again pattern -- the IMS's existing precedent
+    for this exact "browse or search a growing list" problem (UAT
+    finding, Section 12: the old ID-only fallback made anything past the
+    recent window unreachable, since nobody actually remembers an
+    Expense ID). Re-prompts on a miss instead of exiting straight back to
+    the Operation 9 menu (earlier UAT finding, TC-451)."""
+    while True:
+        raw = ask_text(
+            "Expense ID, or search by Category/Subcategory/Description "
+            "(press Enter to browse recent):", required=False)
+        query = raw.strip()
+
+        if not query:
+            matches = _get_recent_expense_rows(limit=_EXPENSE_SEARCH_RESULT_CAP)
+            header = f"{_EXPENSE_SEARCH_RESULT_CAP} most recent"
+        else:
+            sheet_row = _find_expense_log_row(query)
+            if sheet_row is not None:
+                return sheet_row
+            matches = _search_expense_rows(query)
+            header = f'matches for "{query}"'
+
+        if not matches:
+            if not query:
+                _warn("No expenses have been logged yet.")
+                return None
+            _warn(f"No existing expense found for '{query}'.")
+            action = questionary.select(
+                "",
+                choices=[
+                    questionary.Choice(title="↩ Search again", value="__SEARCH__"),
+                    questionary.Separator(" "),
+                    _back_choice(),
+                ],
+                qmark="",
+                instruction=" ",
+                style=_MENU_STYLE,
+            ).unsafe_ask()
+            if action == "__SEARCH__":
+                continue
+            return None
+
+        result = _select_expense_from_matches(matches, header)
+        if result == "__SEARCH__":
+            continue
+        return result
+
+
+def _edit_existing_expense():
+    """Collect-then-review, matching the inventory-unit and customer-details
+    editors' own convention elsewhere in the IMS (UAT finding, Section 12)
+    -- previously this confirmed and wrote one field at a time, immediately,
+    the only field-edit flow in the app that worked that way. Now: stage as
+    many field edits as wanted in memory, review them all together in one
+    EDIT SUMMARY box (old -> new per field, matching the other editors'
+    exact table-with-arrows presentation), then one combined confirm and
+    one single batched write (_update_expense_log_fields()) -- so a
+    transient failure mid-batch can never leave the row half-updated,
+    same reasoning as update_row() on the main inventory sheet."""
+    print("\n--- \033[1;38;5;124mEDIT AN EXISTING EXPENSE\033[0m ---")
+
+    def _show_record(sr):
+        r = _get_expense_log_row(sr)
+        _print_boxed("CURRENT RECORD", [("EXPENSE", [
+            f"  \033[1m{'Expense ID:':<16}\033[0m{r['Expense ID']}",
+            f"  \033[1m{'Date:':<16}\033[0m{r['Date']}",
+            f"  \033[1m{'Type:':<16}\033[0m{r['Type']}",
+            f"  \033[1m{'Category:':<16}\033[0m{r['Category']}",
+            f"  \033[1m{'Subcategory:':<16}\033[0m{r['Subcategory']}",
+            f"  \033[1m{'Amount:':<16}\033[0m${_sheet_float(r['Amount (USD)']):,.2f}",
+            f"  \033[1m{'Description:':<16}\033[0m{r['Description']}",
+            f"  \033[1m{'Recurring:':<16}\033[0m{r['Recurring (Y/N)']}",
+        ])])
+        return r
+
+    # Confirm-before-edit, same convention as the other "Is this the
+    # correct unit?" gates elsewhere in the IMS (UAT finding, Section 12).
+    # Declining re-opens the lookup instead of exiting straight back to the
+    # Operation 9 menu, matching that same established pattern.
+    while True:
+        sheet_row = _find_expense_to_edit()
+        if sheet_row is None:
+            return
+        row = _show_record(sheet_row)
+        if ask_yes_no("Is this the correct expense?"):
+            break
+
+    # working mirrors the inventory editor's own pattern: the *effective*
+    # current value of every field, threaded through the whole multi-field
+    # session so a later field (e.g. a direct Subcategory edit after an
+    # earlier Category change) always sees what's actually staged, not the
+    # stale on-sheet original. field_changed holds only genuinely-changed
+    # fields (compared against the true original in `row`, not against
+    # whatever was staged a moment ago) -- editing a field back to its
+    # original value settles it back out of field_changed entirely, same
+    # "no-op isn't a change" behavior the other editors already have.
+    working = dict(row)
+    field_changed = {}
+    _subcat_is_new = [False]  # mutable cell -- set fresh every time Category or Subcategory is (re)picked
+
+    def _pick_and_edit_expense_field(has_changes):
+        """Returns True (a field is now staged as genuinely changed),
+        False (explicit stop -- Cancel before anything changed, Done once
+        something has, or Ctrl+C), or None (the attempt produced no
+        change -- caller should show the field picker again, not exit)."""
+        _stop_choice = "Done — review changes" if has_changes else "Cancel — no changes"
+        field = questionary.select(
+            "",
+            choices=["Date", "Type", "Category", "Subcategory", "Amount (USD)", "Description",
+                     questionary.Separator(" "), _back_choice(_stop_choice)],
+            qmark="\nWhich field would you like to edit?",
+            instruction=" ",
+            style=_MENU_STYLE,
+        ).unsafe_ask()
+        if field in (None, _stop_choice):
+            return False
+
+        if field == "Date":
+            new_value = ask_date("New date", not_future=True).strftime("%m-%d-%Y")
+            working["Date"] = new_value
+            if new_value == row["Date"]:
+                field_changed.pop("Date", None)
+                return None
+            field_changed["Date"] = new_value
+            return True
+
+        if field == "Type":
+            new_value = _select_expense_type()
+            if new_value is None:
+                return None
+            working["Type"] = new_value
+            if new_value == row["Type"]:
+                field_changed.pop("Type", None)
+                return None
+            field_changed["Type"] = new_value
+            return True
+
+        if field == "Category":
+            # Cascading rule: a new category invalidates the old
+            # subcategory, so it has to be re-picked from the new
+            # category's own list -- always, even if this session's edit
+            # ultimately settles back to the original category. Picking
+            # "+ Add new subcategory" here may return is_new=True -- the
+            # reference-tab write for that is deferred to the final
+            # confirm below (Section 11): writing it early would leave an
+            # orphan behind if the whole batch gets discarded.
+            new_cat = _select_expense_category()
+            if new_cat is None:
+                return None
+            new_subcat, is_new = _select_or_add_expense_subcategory(
+                new_cat, _get_expense_subcategories())
+            if new_subcat is None:
+                return None
+            working["Category"] = new_cat
+            working["Subcategory"] = new_subcat
+            _subcat_is_new[0] = is_new
+            if new_cat == row["Category"]:
+                field_changed.pop("Category", None)
+            else:
+                field_changed["Category"] = new_cat
+            if new_subcat == row["Subcategory"]:
+                field_changed.pop("Subcategory", None)
+            else:
+                field_changed["Subcategory"] = new_subcat
+            return True if ("Category" in field_changed or "Subcategory" in field_changed) else None
+
+        if field == "Subcategory":
+            new_subcat, is_new = _select_or_add_expense_subcategory(
+                working["Category"], _get_expense_subcategories())
+            if new_subcat is None:
+                return None
+            working["Subcategory"] = new_subcat
+            _subcat_is_new[0] = is_new
+            if new_subcat == row["Subcategory"] and working["Category"] == row["Category"]:
+                field_changed.pop("Subcategory", None)
+                return True if "Category" in field_changed else None
+            field_changed["Subcategory"] = new_subcat
+            return True
+
+        if field == "Amount (USD)":
+            new_value = round(ask_number("New amount (USD):"), 2)
+            working["Amount (USD)"] = new_value
+            if new_value == _sheet_float(row["Amount (USD)"]):
+                field_changed.pop("Amount (USD)", None)
+                return None
+            field_changed["Amount (USD)"] = new_value
+            return True
+
+        # Description
+        new_value = ask_text("New description/vendor:")
+        working["Description"] = new_value
+        if new_value == row["Description"]:
+            field_changed.pop("Description", None)
+            return None
+        field_changed["Description"] = new_value
+        return True
+
+    def _collect_edits():
+        # No explicit print() here between iterations -- the field picker's
+        # own qmark already carries a leading "\n" (unlike the inventory
+        # editor's equivalent, whose qmark has none and needs its own
+        # print() for the same gap). Adding one here double-stacked the
+        # blank line on every loop after the first (UAT finding, Section
+        # 12) -- the exact same bug already fixed once in manage_expenses()'s
+        # own menu loop, reintroduced here by copying the wrong precedent.
+        while True:
+            result = _pick_and_edit_expense_field(has_changes=bool(field_changed))
+            if result is False:
+                return
+
+    _collect_edits()
+
+    if not field_changed:
+        print("\n\033[33mNo changes made. Returning to Manage Expenses.\033[0m")
+        return
+
+    _FIELD_ORDER = ["Date", "Type", "Category", "Subcategory", "Amount (USD)", "Description"]
+    while True:
+        label_width = max(len(f) for f in field_changed) + 2
+        _pairs = []
+        for f in _FIELD_ORDER:
+            if f not in field_changed:
+                continue
+            if f == "Amount (USD)":
+                _pairs.append((f, f"${_sheet_float(row[f]):,.2f}", f"${field_changed[f]:,.2f}"))
+            else:
+                _pairs.append((f, row[f], field_changed[f]))
+        # Old-value column padded to the widest one actually shown this
+        # round (not a fixed guess) -- matching the inventory editor's own
+        # EDIT SUMMARY box, which aligns its arrows the same way. Without
+        # this, a row with a short old value (e.g. "Testing") left its
+        # arrow landing well short of a row with a long one (e.g. a full
+        # date), a ragged, easy-to-misread table (UAT finding, Section 12).
+        old_width = max(_visible_len(od) for _, od, _ in _pairs)
+        _rows = [
+            f"  \033[1m{f + ':':<{label_width}}\033[0m{_pad_visible(od, old_width)}  →  {nd}"
+            for f, od, nd in _pairs
+        ]
+        _print_boxed("EDIT SUMMARY", [("EXPENSE", _rows)])
+
+        action = questionary.select(
+            "",
+            choices=[
+                "Confirm and apply changes",
+                "Edit more fields",
+                questionary.Separator(" "),
+                _back_choice("Discard changes & continue"),
+            ],
+            qmark="\nApply these changes?",
+            instruction=" ",
+            style=_MENU_STYLE,
+        ).unsafe_ask()
+
+        if action == "Edit more fields":
+            print()
+            _collect_edits()
+            if not field_changed:
+                print("\n\033[33mNo changes made. Returning to Manage Expenses.\033[0m")
+                return
+            continue
+
+        if action in (None, "Discard changes & continue"):
+            print("\nEdit cancelled. Existing details retained. Returning to Manage Expenses.")
+            return
+
+        break  # "Confirm and apply changes"
+
+    if "Subcategory" in field_changed and _subcat_is_new[0]:
+        _commit_new_subcategory(working["Category"], field_changed["Subcategory"], True)
+
+    # Editing Amount, Type, Category, Subcategory, or Description on a
+    # recurring entry -- synced to the registry via the Recurring Series ID
+    # stamped on this row at creation time, not by re-matching on
+    # Category/Subcategory/Date (UAT finding, Section 11: that match broke
+    # silently the moment any of those three fields was ever edited, and
+    # couldn't tell two series with the same Category and Subcategory
+    # apart). Only offers to sync when this is the *most recent* logged
+    # instance of that series, decided by _latest_expense_id_for_series()
+    # -- whichever instance has the highest EXP-#### serial, i.e. was
+    # created last, a fact that can't be disturbed by editing any other
+    # field (UAT finding, Section 12). Now asked once per eligible changed
+    # field, together, right before the write -- previously interleaved
+    # with field selection, since each field used to confirm and write
+    # immediately on its own. Date deliberately stays excluded -- there's
+    # no analogous "tracked default" on the registry a future sweep would
+    # reuse the way it reuses Last Amount/Type/Category/Subcategory/
+    # Description.
+    series_id = row.get("Recurring Series ID", "").strip()
+    registry_updates = {}
+    if row["Recurring (Y/N)"].strip() == "Yes" and series_id:
+        reg = next((reg_row for reg_row in _get_recurring_registry_rows()
+                    if reg_row.get("Registry ID", "").strip() == series_id
+                    and reg_row.get("Active (Y/N)", "").strip() == "Yes"), None)
+        if reg is not None and _latest_expense_id_for_series(series_id) == row["Expense ID"]:
+            # Category and Subcategory are asked as one combined question,
+            # not two -- a cascaded Category change always stages both
+            # together, and asking separately would re-ask essentially the
+            # same thing twice. Matches the single-field flow's own
+            # original "category to X / Y" combined wording.
+            sync_items = []
+            if "Amount (USD)" in field_changed:
+                sync_items.append(({"last_amount": field_changed["Amount (USD)"]},
+                                    "amount", f"${field_changed['Amount (USD)']:,.2f}"))
+            if "Type" in field_changed:
+                sync_items.append(({"exp_type": field_changed["Type"]}, "type", field_changed["Type"]))
+            if "Category" in field_changed and "Subcategory" in field_changed:
+                sync_items.append(({"category": field_changed["Category"], "subcategory": field_changed["Subcategory"]},
+                                    "category", f"{field_changed['Category']} / {field_changed['Subcategory']}"))
+            elif "Category" in field_changed:
+                sync_items.append(({"category": field_changed["Category"]}, "category", field_changed["Category"]))
+            elif "Subcategory" in field_changed:
+                sync_items.append(({"subcategory": field_changed["Subcategory"]}, "subcategory", field_changed["Subcategory"]))
+            if "Description" in field_changed:
+                sync_items.append(({"description": field_changed["Description"]}, "description", field_changed["Description"]))
+
+            for kw_additions, label, display_value in sync_items:
+                if ask_yes_no(
+                    f"This is also your most recent recurring entry for "
+                    f"{row['Subcategory']} -- update the tracked {label} to "
+                    f"{display_value} as well?"
+                ):
+                    registry_updates.update(kw_additions)
+            if registry_updates:
+                _update_recurring_registry_row(reg["_sheet_row"], **registry_updates)
+
+    _update_expense_log_fields(sheet_row, field_changed)
+    print(f"\n\033[38;5;202m✓ Updated {row['Expense ID']}.\033[0m")
+
+    if ask_yes_no("Edit another expense?"):
+        return _edit_existing_expense()
+    # Same reasoning as _log_new_expense()'s symmetric ending: only this
+    # final decline means the operator is genuinely done, not correcting a
+    # mistake -- every earlier return in this function still drops back to
+    # Operation 9's own menu.
+    print("\nReturning to Main Menu.")
+    return True
+
+
+# ── Operation 12 entry point ─────────────────────────────────────────────────
+def manage_expenses():
+    print("\n--- \033[1;38;5;124mMANAGE EXPENSES\033[0m ---")
+    _recurring_expense_sweep()
+
+    while True:
+        choice = questionary.select(
+            "",
+            choices=[
+                "Log a new expense",
+                "Edit an existing expense",
+                questionary.Separator(" "),
+                _back_choice("Back to Main Menu"),
+            ],
+            qmark="\nHow would you like to proceed?",
+            instruction=" ",
+            style=_MENU_STYLE,
+        ).unsafe_ask()
+
+        if choice in (None, "Back to Main Menu"):
+            return
+        if choice == "Log a new expense":
+            if _log_new_expense():
+                return
+        elif choice == "Edit an existing expense":
+            if _edit_existing_expense():
+                return
+
+
 def main_menu():
     load_garment_types()
     load_countries()
@@ -8837,13 +10273,14 @@ def main_menu():
         print("\033[2m6.\033[0m  Record a sale")
         print("\033[2m7.\033[0m  Record an outstanding payment")
         print("\033[2m8.\033[0m  Cancel a sale")
-        print("\033[2m9.\033[0m  View customer insights")
-        print("\033[2m10.\033[0m Generate report")
-        print("\033[2m11.\033[0m Generate product description")
+        print("\033[2m9.\033[0m  Manage expenses")
+        print("\033[2m10.\033[0m View customer insights")
+        print("\033[2m11.\033[0m Generate report")
+        print("\033[2m12.\033[0m Generate product description")
         print()
-        print("\033[2m12. Exit\033[0m")
+        print("\033[2m13. Exit\033[0m")
         print()
-        raw = input(f"\001\033[1m\002Select an option (1-12):\001\033[0m\002 {_ANSWER_COLOR}").strip()
+        raw = input(f"\001\033[1m\002Select an option (1-13):\001\033[0m\002 {_ANSWER_COLOR}").strip()
         print("\033[0m", end="")
         try:
             if raw == "1":
@@ -8863,16 +10300,18 @@ def main_menu():
             elif raw == "8":
                 cancel_sale()
             elif raw == "9":
-                customer_insights()
+                manage_expenses()
             elif raw == "10":
-                generate_report_menu()
+                customer_insights()
             elif raw == "11":
-                generate_product_description()
+                generate_report_menu()
             elif raw == "12":
+                generate_product_description()
+            elif raw == "13":
                 print("\nGoodbye.")
                 break
             else:
-                _warn("Please enter a number between 1 and 12.")
+                _warn("Please enter a number between 1 and 13.")
         except KeyboardInterrupt:
             # Ctrl+C during a raw input()-based prompt interrupts it after
             # the orange answer-color code has already been sent (it's

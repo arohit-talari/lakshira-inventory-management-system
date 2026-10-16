@@ -511,6 +511,16 @@ def _connect(mode):
     client = gspread.authorize(creds)
     return client.open_by_key(SHEET_IDS[mode]).worksheet(WORKSHEET_NAME)
 
+def _connect_expense_log(mode):
+    """Separate connection from _connect() -- feeds the Operating
+    Margin/CapEx section (UAT finding, Section 12 of
+    docs/Manage_Expenses_Operation_Scope.md: the has_opex gate already
+    existed in the PDF-building code, but nothing ever actually read the
+    Expense Log tab to set the key that activates it)."""
+    creds  = ServiceAccountCredentials.from_json_keyfile_name(CREDS_PATH, SCOPE)
+    client = gspread.authorize(creds)
+    return client.open_by_key(SHEET_IDS[mode]).worksheet("Expense Log")
+
 def _get_reserver_name(notes):
     """Extract the reserver's name from the Inventory Notes reservation line
     -- Customer Name on the sheet is only ever populated at actual sale
@@ -569,8 +579,22 @@ def _load(start, end, ps, pe, mode):
         if cancel_line:                   cancelled.append(r)
         if status == "Sold - Partial Payment": outstanding.append(r)
 
+    # Expense Log -- see _connect_expense_log()'s docstring. Bucketed by the
+    # same two windows (current period, prior comparable period) as sales
+    # above, using the Expense Log's own "Date" column.
+    exp_ws   = _connect_expense_log(mode)
+    exp_rows = exp_ws.get_all_records()
+    period_expenses, prior_expenses = [], []
+    for r in exp_rows:
+        ed = _parse_date(r.get("Date", ""))
+        if ed and _in(ed, start, end):
+            period_expenses.append(r)
+        if ed and _in(ed, ps, pe):
+            prior_expenses.append(r)
+
     return dict(all=rows, sales=period_sales, prior=prior_sales,
-                added=period_added, cancelled=cancelled, outstanding=outstanding)
+                added=period_added, cancelled=cancelled, outstanding=outstanding,
+                expenses=period_expenses, prior_expenses=prior_expenses)
 
 # ── Payment method from notes ──────────────────────────────────────────────────
 def _method(txn):
@@ -622,6 +646,32 @@ def _metrics(data, start, end, ps, pe, period_type):
     p_gp  = sum(_flt(r.get("Gross Profit (USD)"))         for r in prior)
     p_margin = p_gp / p_rev if p_rev else 0
     cancel_lost = sum(_cancelled_sale_amount(r, start, end) for r in data["cancelled"])
+
+    # Operating Expenses / CapEx -- from the Expense Log tab (Manage
+    # Expenses, Operation 9). Only computed when the CURRENT period has at
+    # least one logged expense of either type -- has_opex elsewhere in
+    # this file checks for "operating_expenses" key presence to decide
+    # whether to show the whole section at all, so a period with
+    # genuinely zero expenses (e.g. any report before this operation
+    # existed) must leave the key out entirely rather than set it to 0 --
+    # otherwise every historical report would retroactively show a
+    # hollow "$0 Operating Expenses" section that never existed when that
+    # period actually ran (UAT finding, Section 12). CapEx is deliberately
+    # excluded from Operating Profit/Margin, not subtracted -- it's
+    # disclosed as its own line instead (same design as the rest of this
+    # section).
+    opex_rows   = [r for r in data["expenses"] if r.get("Type","").strip() == "Operating Expense"]
+    capex_rows  = [r for r in data["expenses"] if r.get("Type","").strip() == "Capital Expenditure"]
+    p_opex_rows = [r for r in data["prior_expenses"] if r.get("Type","").strip() == "Operating Expense"]
+    has_expense_data = bool(opex_rows or capex_rows)
+    if has_expense_data:
+        operating_expenses = sum(_flt(r.get("Amount (USD)")) for r in opex_rows)
+        capex              = sum(_flt(r.get("Amount (USD)")) for r in capex_rows)
+        operating_profit   = gp - operating_expenses
+        operating_margin   = operating_profit / rev if rev else 0
+        p_operating_expenses = sum(_flt(r.get("Amount (USD)")) for r in p_opex_rows)
+        p_operating_profit   = p_gp - p_operating_expenses
+        p_operating_margin   = p_operating_profit / p_rev if p_rev else 0
 
     # Sales activity
     units     = len(sales)
@@ -1043,6 +1093,10 @@ def _metrics(data, start, end, ps, pe, period_type):
         swing_change=swing_change,
         orphaned_sold_units=orphaned_sold_units,
         warehouse_unreachable=warehouse_unreachable,
+        **({"operating_expenses": operating_expenses, "capex": capex,
+            "operating_profit": operating_profit, "operating_margin": operating_margin,
+            "p_operating_profit": p_operating_profit, "p_operating_margin": p_operating_margin}
+           if has_expense_data else {}),
     )
 
 # ── PDF building helpers ───────────────────────────────────────────────────────
@@ -1679,7 +1733,7 @@ def _claude_summary(m, period_label, report_type):
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         payload = {
             "period": period_label, "report_type": report_type,
-            "revenue_usd": round(m["rev"], 2),
+            "net_revenue_usd": round(m["rev"], 2),
             "gross_profit_usd": round(m["gp"], 2),
             "avg_margin_pct": round(m["margin"]*100, 1),
             "units_sold": m["units"],
@@ -1692,7 +1746,7 @@ def _claude_summary(m, period_label, report_type):
                 m["rev"] / m["total_lifetime_revenue"] * 100 if m["total_lifetime_revenue"] else 0, 1),
             "units_discounted": len(m["disc_rows"]),
             "discount_revenue_lost": round(m["disc_lost"], 2),
-            "prior_revenue_usd": round(m["p_rev"], 2),
+            "prior_net_revenue_usd": round(m["p_rev"], 2),
             "new_customers": len(m["new_c"]),
             "returning_customers": len(m["ret_c"]),
             "outstanding_balance_usd": round(m["total_out"], 2),
@@ -1735,6 +1789,17 @@ def _claude_summary(m, period_label, report_type):
                         (m["period_occasion_split"]["single"]["revenue"] + m["period_occasion_split"]["multi"]["revenue"]) * 100, 1)
                         if (m["period_occasion_split"]["single"]["revenue"] + m["period_occasion_split"]["multi"]["revenue"]) else 0,
                 }} if m["period_occasion_split"] else {}),
+            # Gated the same way as top_channels/purchase_behavior_pct above --
+            # these keys don't exist in m yet (no OpEx/CapEx data source is
+            # wired in), so this contributes nothing until _metrics() actually
+            # computes them. Once it does, this activates with no further
+            # changes needed here.
+            **({"operating_expenses_usd": round(m["operating_expenses"], 2),
+                "operating_profit_usd": round(m["operating_profit"], 2),
+                "operating_margin_pct": round(m["operating_margin"] * 100, 1),
+                "capital_expenditures_usd": round(m["capex"], 2),
+                "net_cash_position_usd": round(m["operating_profit"] - m["capex"], 2),
+               } if "operating_expenses" in m else {}),
         }
         brand_context = _load_brand_context()
         brand_context_block = (
@@ -1751,25 +1816,71 @@ Business data for {period_label}:
 
 Write a concise executive summary followed by specific actionable recommendations. The stakeholder (business owner) is non-technical but business-savvy, and will read this report on her own, without an analyst present to explain it. The summary itself has to do the work an analyst would normally do out loud. She may also relay individual findings to functional people (a bookkeeper, a marketer) who won't have read the rest of the report, so each point needs to stand on its own. Every recommendation must be concrete and implementable, not generic advice. Align recommendations with the luxury boutique vision. Never use an abbreviation or industry shorthand (e.g. "MoM", "YoY", "AOV") without writing it out in full first: spell out "month-over-month" or "year-over-year" the way a person would say it out loud, not the acronym a spreadsheet would use.
 
-Write like a senior analyst presenting findings out loud to a founder, not like a printout of the underlying math. Use em dashes sparingly, only where a sentence genuinely calls for one grammatically, never as a default habit or a way to bolt a second thought onto a sentence you could have just split in two. A human analyst reaches for one occasionally; AI-generated text tends to overuse them, and that overuse is exactly what to avoid. That means: one idea per sentence. State the finding in plain words first, then support it with the number, not the number first with the meaning tacked on afterward. When you connect two metrics as evidence for the same underlying story (e.g. low inventory turnover and a high count of aged units both pointing at stock not moving), give that connection its own full sentence, for example "X and Y point at the same problem: ...", rather than folding it into the sentence that already stated the headline number. Only draw a connection when the data actually supports it; do not force a correlation that isn't there. Do not stack multiple clauses onto one sentence with dashes or semicolons as a way to fit more in: if a sentence needs a dash to bolt on a second idea, split it into two sentences instead. Leave out supporting numbers that don't actually change the reader's takeaway; every figure you cite should be doing work, not just be available.
+Write like a senior analyst presenting findings out loud to a founder, not like a printout of the underlying math. Use em dashes sparingly, only where a sentence genuinely calls for one grammatically, never as a default habit or a way to bolt a second thought onto a sentence you could have just split in two. A human analyst reaches for one occasionally; AI-generated text tends to overuse them, and that overuse is exactly what to avoid. That means: one idea per sentence. State the finding in plain words first, then support it with the number, not the number first with the meaning tacked on afterward. When you connect two metrics as evidence for the same underlying story (e.g. low inventory turnover and a high count of aged units both pointing at stock not moving), give that connection its own full sentence, for example "X and Y point at the same problem: ...", rather than folding it into the sentence that already stated the headline number. Only draw a connection when the data actually supports it; do not force a correlation that isn't there. Do not stack multiple clauses onto one sentence with dashes or semicolons as a way to fit more in: if a sentence needs a dash to bolt on a second idea, split it into two sentences instead. This applies equally to commas -- a sentence like "Net revenue reached $24,250, up 84% from last month, on 52 units sold at a 29.1% margin" stacks four separate facts (revenue, growth rate, volume, margin) with no dash in sight, and is the same violation. A sentence may report more than one number only when every number serves the exact same single point (e.g. two numbers establishing one comparison); the moment the numbers start answering different questions, each gets its own sentence. Leave out supporting numbers that don't actually change the reader's takeaway; every figure you cite should be doing work, not just be available.
 
 When a margin or cost figure looks like a problem, ground the explanation only in what Lakshira actually controls: its own pricing and markup relative to what it pays to acquire a unit, which suppliers it chooses to source from and how much, and its discounting policy. Lakshira does not set what a supplier or weaver charges, so never frame the fix as something that needs to happen on the supplier's side (for example, do not say something like "the fix sits with weaver pricing"), and never describe a margin gap as a "sourcing problem" as if the acquisition cost itself were the thing to change. If margin is a genuine concern, the actionable conclusion is about Lakshira's own pricing decisions -- staying competitively priced while still sustaining the margin the business needs to grow -- not a call for suppliers to charge less.
 
 FORMAT RULES (follow exactly, no deviations):
 
 SUMMARY:
-[Plain business language. Write as many sentences as the analysis genuinely needs to stay clear at one idea per sentence: most periods will run 7–11 short sentences, not 3–4 long ones. Structure the summary around these beats, in order:
-1. SITUATION (1 sentence): a brief grounding statement connecting this period to where the business actually is in its longer arc toward the luxury boutique goal, drawing on the brand & product context above where it's genuinely relevant. Orientation, not a metric and not a recap of the prior period -- what is this report about to tell her, in the context of what she's actually building.
-2. BOTTOM LINE (1 sentence, immediately after, before any supporting numbers): the single takeaway a founder would want if she only read one sentence of this report. State the meaning, not a metric -- for example "the business grew revenue but that growth is dangerously concentrated in one customer relationship," not a dollar figure. Pick whichever takeaway the data actually supports as the period's real headline, not necessarily whichever number happens to be largest. Everything that follows has to support this sentence, not introduce a separate topic from it.
-3. Revenue for the period and how it moved vs. the prior period.
-4. Profitability: gross margin.
-5. Volume: units sold, AND how this period stacks up against lifetime performance
-   (what share of all-time units/revenue this single period represents). This is a young,
-   growing business, so a period's contribution to lifetime totals is a real signal of
-   momentum, so call out whether this was a strong or weak period relative to that lifetime
-   base, not just in isolation.
-6. The most consequential additional finding(s) in the data, beyond revenue/profit/volume -- at most two, and only if each is genuinely significant. This does not have to be framed as a "risk": it can be a risk, an opportunity, a customer-behavior shift, a supplier or inventory signal, or anything else the data actually supports as consequential this period. Every finding included here must reinforce, complicate, or explain the Bottom Line from step 2 -- if you cannot connect it to that throughline in one clause, leave it out of the summary rather than stating it as a disconnected fact. A real finding that doesn't fit the throughline still belongs in this report -- put it in Recommendations instead, where it can stand on its own without needing to fit a narrative.
-Do not pad with sentences that repeat a point already made. Do not treat steps 3-6 as a checklist to work through independently of the Bottom Line -- every sentence should read as support for, or elaboration of, the single throughline stated in step 2, not as a section-by-section survey of the report.
+[Plain business language. Before writing anything, decide the single headline
+thesis this period actually supports -- the one sentence a founder would want
+if she only read one line of this report. A quiet, unremarkable period where
+nothing material changed is itself a legitimate thesis ("steady month, no
+action needed") -- forcing drama where there isn't any is worse than saying
+so plainly.
+
+Lead with that thesis as the first sentence, stated as meaning, not a metric
+-- for example "the business grew revenue but that growth is dangerously
+concentrated in one customer relationship," not a dollar figure. Everything
+else in the summary exists only to support, complicate, or explain that one
+sentence.
+
+Pick the thesis the data most strongly supports as the period's real
+headline -- not whichever number is most flattering, and not whichever
+number is largest. If the honest headline is uncomfortable (a real decline,
+a real risk, a real loss), lead with that directly and plainly, the same way
+you would lead with good news -- do not substitute a softer, secondary
+metric as the thesis to avoid stating the real one.
+
+This means the uncomfortable number itself belongs in the lead clause of
+the thesis sentence, not held back for a sentence or two while a softer
+framing goes first. For example, "August was a quiet month in volume, but
+nothing about how Lakshira sells weakened" leads with reassurance and
+delays the real number -- weaker than "Revenue fell 65% in August, but the
+drop looks like timing, not weakening demand," which puts the hard number
+first and lets the explanation complicate it afterward. Same underlying
+analysis, different grammatical lead -- always choose the second form when
+the headline is uncomfortable.
+
+After the thesis, draw from the following only where it genuinely serves
+that thesis: revenue and how it moved, gross margin and operating margin
+when both are available (the gap between them is often the real story),
+units sold and how this period compares to the business's lifetime totals
+(a real signal of momentum for a young, growing business), customer
+behavior, inventory signals, category or supplier signals, capital
+spending, outstanding balances. This is a menu, not a
+checklist -- do not work through it topic by topic, and do not include
+something just because the data exists for it. Skip anything that doesn't
+connect to the thesis in one clause. A focused 5-sentence summary citing
+four numbers beats a longer one citing ten, if the thesis is fully served by
+fewer.
+
+Include at most two additional findings beyond the thesis's core evidence,
+and only if each is genuinely significant on its own. This is a hard limit,
+not a target to approach. A real finding that doesn't fit the throughline
+still belongs in this report -- put it in Recommendations instead, where it
+can stand on its own.
+
+One sentence of grounding context -- connecting this period to where the
+business actually is in its longer arc toward the luxury boutique goal,
+drawing on the brand & product context above where genuinely relevant -- may
+appear anywhere it reads naturally, including folded into the thesis
+sentence itself. It does not need to be its own opening sentence, and it is
+not the first thing the reader should see.
+
+Write as many sentences as the thesis genuinely needs, and no more -- this
+will vary period to period; do not target a fixed sentence count.
 Mark every key metric (dollar amounts, percentages, growth rates, unit counts) by wrapping it in double angle brackets: <<$24,250>>, <<up 84% from last month>>, <<29.1% margin>>, <<52 units>>.]
 
 RECOMMENDATIONS:
@@ -1926,28 +2037,90 @@ def _sec_exec(claude_text):
 def _sec_revenue(m):
     rv, gp, mg = m["rev"], m["gp"], m["margin"]
 
-    # Section title + scorecard kept together so the title is never orphaned
+    # Operating Expenses/Profit/Margin, Capital Expenditures, and Net Cash
+    # Position all depend on OpEx/CapEx data that has no source yet (no
+    # sheet tab, no schema). Gated the same way as the Claude summary
+    # payload above -- this block (and the scorecard swap below) contributes
+    # nothing until _metrics() actually computes these keys, at which point
+    # it activates with no further changes needed here.
+    has_opex = "operating_expenses" in m
+
+    # Section title + scorecard kept together so the title is never orphaned.
+    # Operating Margin swaps in for Gross Margin once it exists -- the
+    # scorecard caps at 5 metrics (matching the live dashboard's own
+    # convention), so this is a swap, not an addition.
     story = [KeepTogether(_sec("Revenue & Profit") + [_metric_row([
-        ("Total Revenue",    _usd_k(rv)),
+        ("Net Revenue",       _usd_k(rv)),
         ("Gross Profit",     _usd_k(gp)),
-        ("Gross Margin",     _pct(mg)),
+        ("Operating Margin", _pct(m["operating_margin"])) if has_opex
+            else ("Gross Margin", _pct(mg)),
         ("Units Sold",       str(m["units"])),
         ("Avg Order Value",  _usd_k(m["avg_price"])),
     ])])]
     story.append(Spacer(1, 10))
 
+    opex_rows = [
+        ["Operating Expenses",       _usd(m["operating_expenses"], deduction=True)],
+        ["Operating Profit",         _usd(m["operating_profit"])],
+        ["Operating Margin %",       _pct(m["operating_margin"])],
+        ["Capital Expenditures",     _usd(m["capex"])],
+        ["Net Cash Position",        _usd(m["operating_profit"] - m["capex"])],
+    ] if has_opex else []
+
     rows = [
-        ["Revenue (Gross)",          _usd(rv)],
+        ["Revenue (Gross)",          _usd(rv + m["cancel_lost"])],
         ["Cancellation Revenue Lost",_usd(m["cancel_lost"], deduction=True)],
-        ["Net Revenue",              _usd(rv - m["cancel_lost"])],
+        ["Net Revenue",              _usd(rv)],
         ["Cost of Goods Sold (COGS)",_usd(m["cost"], deduction=True)],
         ["Gross Profit",             _usd(gp)],
         ["Gross Margin %",           _pct(mg)],
-    ]
+    ] + opex_rows
+    key_rows  = {2, 4} | ({7} if has_opex else set())
+    bold_rows = {5}    | ({8, 10} if has_opex else set())
     story.append(_tbl(["", "Amount"], rows,
                        [CONTENT_W*0.65, CONTENT_W*0.35],
-                       key_rows={2, 4}, bold_rows={5}))
+                       key_rows=key_rows, bold_rows=bold_rows))
     story.append(Spacer(1, 8))
+
+    if has_opex:
+        opex_note = _split_note(
+            f"<b><u>Operating Expenses</u>:</b> <b>{_usd(m['operating_expenses'])}</b> this "
+            f"period -- the regular cost of running the business, separate from what it "
+            f"costs to make or buy the inventory itself. Things like ad spend and "
+            f"exhibition booth fees fall here."
+        )
+        profit_margin_note = _split_note(
+            f"<b><u>Operating Profit</u>:</b> <b>{_usd(m['operating_profit'])}</b> -- "
+            f"what's left after covering both the cost of the inventory and the cost of "
+            f"running the business. <b>Operating Margin</b> shows that same amount as "
+            f"<b>{_pct(m['operating_margin'])}</b> of revenue, so it stays comparable "
+            f"even as revenue goes up or down. <b>What's healthy:</b> a higher percentage "
+            f"means more of each sale is staying with the business after everything it "
+            f"costs to make, sell, and run it; a lower percentage means expenses are "
+            f"eating further into that money."
+        )
+        capex_note = _split_note(
+            f"<b><u>Capital Expenditures</u>:</b> <b>{_usd(m['capex'])}</b> this period "
+            f"-- large, one-time purchases that keep being useful for years, like "
+            f"equipment or storage space, rather than a cost that's used up right away. "
+            f"This amount is <b>not</b> subtracted from Operating Profit above, on "
+            f"purpose: a single big purchase shouldn't make one period look worse than "
+            f"it really is. Read it alongside Operating Profit together -- Operating "
+            f"Profit shows how the core business is doing, and this shows what was "
+            f"invested back into it."
+        )
+        net_cash_note = _split_note(
+            f"<b><u>Net Cash Position</u>:</b> "
+            f"<b>{_usd(m['operating_profit'] - m['capex'])}</b> -- Operating Profit minus "
+            f"Capital Expenditures: what's actually left after running the business and "
+            f"paying for things like equipment or storage space to grow it. <b>What's "
+            f"healthy:</b> a dip here in a period with a big purchase isn't a bad sign by "
+            f"itself -- it just means money went toward something that should keep "
+            f"paying off for years. Watch this number over several periods, not any "
+            f"single one, to get a true read."
+        )
+        story += opex_note + profit_margin_note + capex_note + net_cash_note
+        story.append(Spacer(1, 8))
 
     orphaned = m.get("orphaned_sold_units", 0)
     if orphaned:
@@ -1966,18 +2139,33 @@ def _sec_revenue(m):
         ["Total Revenue",    _usd(rv)],
         ["Cost of Goods Sold",_usd(m["cost"], deduction=True)],
         ["Gross Profit",     _usd(gp)],
+    ] + ([
+        ["Operating Expenses",   _usd(m["operating_expenses"], deduction=True)],
+        ["Operating Profit",     _usd(m["operating_profit"])],
+        ["Capital Expenditures", _usd(m["capex"])],
+    ] if has_opex else []) + [
         ["Units Sold",       str(m["units"])],
     ]
-    # This table is always exactly 4 fixed rows, so min_rows=len(tax) safely
-    # protects the whole table + note together — never at risk of exceeding
-    # a page's height the way a variable-length table could be.
-    tax_note = Paragraph(
-        "All figures in USD, with <b>COGS</b> converted from INR using the official "
-        "exchange rate on each item's acquisition date, not today's rate. These are "
-        "gross figures only, before operating expenses, not a substitute for "
-        "accountant-prepared tax figures.",
-        ST["note"]
-    )
+    # This table's row count is fixed per branch (4 rows normally, 7 once
+    # OpEx/CapEx land), so min_rows=len(tax) safely protects the whole
+    # table + note together regardless of which branch is active.
+    if has_opex:
+        tax_note = Paragraph(
+            "All figures in USD, with <b>COGS</b> converted from INR using the official "
+            "exchange rate on each item's acquisition date, not today's rate. Capital "
+            "Expenditures are listed separately because they're often taxed differently "
+            "than regular expenses -- confirm treatment before filing. These figures are "
+            "a reference point, not a substitute for professionally prepared tax figures.",
+            ST["note"]
+        )
+    else:
+        tax_note = Paragraph(
+            "All figures in USD, with <b>COGS</b> converted from INR using the official "
+            "exchange rate on each item's acquisition date, not today's rate. These are "
+            "gross figures only, before operating expenses, not a substitute for "
+            "accountant-prepared tax figures.",
+            ST["note"]
+        )
     story += _sec_table(
         [Paragraph("Tax Reference Summary", ST["sub_head"])],
         ["Metric",""], tax, [CONTENT_W*0.65, CONTENT_W*0.35],
@@ -3054,13 +3242,30 @@ def _sec_pop(m, period_label, period_type, ps, pe):
         "custom":    f"{ps.strftime('%b %d, %Y')} – {pe.strftime('%b %d, %Y')}",
     }.get(period_type, "Prior Period")
 
+    # Gated the same way as the Revenue & Profit section above -- Operating
+    # Profit/Margin have no data source yet, so this contributes nothing
+    # until _metrics() actually computes them, at which point it activates
+    # with no further changes needed here. Added alongside Gross Profit/
+    # Gross Margin %, not swapped in for them -- the value of this table is
+    # seeing the Gross and Operating trend lines side by side, which a swap
+    # would destroy.
+    has_opex = "operating_expenses" in m
+    opex_rows = [
+        ["Operating Profit",   _usd(m["p_operating_profit"]), _usd(m["operating_profit"]),
+         _chg_colored(m["operating_profit"], m["p_operating_profit"])],
+        ["Operating Margin %", _pct(m["p_operating_margin"]), _pct(m["operating_margin"]),
+         _chg_colored(m["operating_margin"], m["p_operating_margin"])],
+    ] if has_opex else []
+
     rows = [
-        ["Total Revenue",  _usd(m["p_rev"]),    _usd(m["rev"]),    _chg_colored(m["rev"],  m["p_rev"])],
+        ["Net Revenue",    _usd(m["p_rev"]),    _usd(m["rev"]),    _chg_colored(m["rev"],  m["p_rev"])],
         ["Gross Profit",   _usd(m["p_gp"]),     _usd(m["gp"]),     _chg_colored(m["gp"],   m["p_gp"])],
         ["Gross Margin %", _pct(m["p_margin"]), _pct(m["margin"]), _chg_colored(m["margin"],m["p_margin"])],
+    ] + opex_rows + [
         ["Units Sold",     str(m["p_units"]),   str(m["units"]),   _chg_colored(m["units"],m["p_units"])],
     ]
-    # Always exactly 4 fixed rows — safe to protect the whole table + note.
+    # 4 fixed rows normally, 6 once Operating Profit/Margin land -- either
+    # way min_rows=len(rows) safely protects the whole table + note together.
     pop_note = Paragraph(
         "As historical data accumulates, these benchmarks will develop into "
         "reliable targets for assessing seasonal patterns and performance trends.",
@@ -3151,10 +3356,18 @@ def _send(pdf_path, period_label, report_type, m):
         print(f"\033[2m  No email recipients configured — PDF saved locally at {pdf_path}.\033[0m")
         return
     try:
+        # Gated the same way as the scorecard swap in _sec_revenue -- a
+        # straight swap, not an addition, since a one-line email headline
+        # has no room for two margin figures side by side.
+        has_opex = "operating_expenses" in m
+        margin_label, margin_value = (
+            ("operating margin", m["operating_margin"]) if has_opex
+            else ("gross margin", m["margin"])
+        )
         headline = (
             f"This period: {_usd(m['rev'])} revenue "
             f"({_chg(m['rev'], m['p_rev'])} vs. prior period), "
-            f"{_pct(m['margin'])} gross margin."
+            f"{_pct(margin_value)} {margin_label}."
         )
         msg            = MIMEMultipart()
         msg["From"]    = EMAIL_SENDER
