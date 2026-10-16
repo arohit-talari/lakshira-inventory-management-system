@@ -410,3 +410,131 @@ def create_partial_payment_unit(label, customer_name="Pytest Outstanding Custome
     retry_on_quota(inv.append_row, row_data)
     _created_skus.append(sku)
     return _get_unit(sku)
+
+
+# ── Manage Expenses (Op 9) fixtures ─────────────────────────────────────────
+# Write to the Expense Log and Recurring Expense Registry tabs, not the main
+# inventory sheet -- separate ID-tracking lists and their own find/delete-by-
+# ID plumbing, mirroring _created_skus/cleanup_created_units() exactly, just
+# scoped to these two tabs instead.
+_created_expense_ids = []
+_created_registry_ids = []
+
+_EXPENSE_CATEGORY = "Marketing & Advertising"
+_EXPENSE_SUBCATEGORY = "Ad Spend (Instagram/Meta)"
+
+
+def _delete_expense_row(expense_id):
+    """Delete the Expense Log row for expense_id, if it's still there --
+    mirrors _delete_row_by_sku()'s same defensive check for a test that
+    already removed its own fixture."""
+    ws = inv.connect_to_expense_log_sheet()
+    row_index = retry_on_quota(inv._find_expense_log_row, expense_id)
+    if row_index is not None:
+        retry_on_quota(ws.delete_rows, row_index)
+
+
+def _delete_registry_row(registry_id):
+    """Delete the Recurring Expense Registry row for registry_id, if it's
+    still there."""
+    ws = inv.connect_to_recurring_registry_sheet()
+    rows = retry_on_quota(inv._get_recurring_registry_rows)
+    match = next((r for r in rows if r["Registry ID"] == registry_id), None)
+    if match is not None:
+        retry_on_quota(ws.delete_rows, match["_sheet_row"])
+
+
+def cleanup_created_expenses():
+    """Delete every row queued in _created_expense_ids. Called from
+    conftest.py after each test, pass or fail.
+
+    Each deletion is isolated in its own try/except -- a transient failure
+    on one row (e.g. a quota retry budget finally exhausted after a long
+    back-to-back run) must not lose track of every other queued row behind
+    it, and must not crash the rest of the autouse teardown either, which
+    is exactly what happened once while building this: one failed registry
+    delete here left a real overdue row behind, AND skipped
+    cleanup_created_registries() entirely, which runs right after it in
+    conftest.py."""
+    while _created_expense_ids:
+        expense_id = _created_expense_ids.pop()
+        try:
+            _delete_expense_row(expense_id)
+        except Exception as e:
+            print(f"\nWARNING: failed to clean up test expense {expense_id}: {e}")
+
+
+def cleanup_created_registries():
+    """Delete every row queued in _created_registry_ids. Called from
+    conftest.py after each test, pass or fail. Same per-item isolation as
+    cleanup_created_expenses(), and for the same reason -- a stray
+    recurring registry row left active is worse than a stray expense row,
+    since it resurfaces as a real overdue item in every subsequent test's
+    own sweep check until it's found and deactivated by hand."""
+    while _created_registry_ids:
+        registry_id = _created_registry_ids.pop()
+        try:
+            _delete_registry_row(registry_id)
+        except Exception as e:
+            print(f"\nWARNING: failed to clean up test registry row {registry_id}: {e}")
+
+
+def delete_expense_subcategory(category, subcategory):
+    """Delete a row from the Expense Subcategories reference tab, if it's
+    still there. Not part of the _created_*_ids autouse-cleanup pattern --
+    a new subcategory is written by the interactive app itself
+    (_commit_new_subcategory()), not by a create_*() fixture helper here,
+    so the test that registers one is responsible for calling this itself
+    (e.g. in its own `finally`). Needed because _add_expense_subcategory()'s
+    fuzzy "did you mean" dedup check means a leftover registration from an
+    earlier run can make the *next* run's differently-named subcategory
+    look like a near-duplicate of it and get redirected instead of
+    registered fresh -- a stray subcategory here is more disruptive to
+    rerun-ability than a stray expense or registry row, which just sit
+    inert until cleaned up."""
+    ws = inv.connect_to_expense_subcategories_sheet()
+    values = retry_on_quota(ws.get_all_values)
+    target_cat = category.strip().casefold()
+    target_sub = subcategory.strip().casefold()
+    for i, row in enumerate(values[3:], start=4):
+        if (len(row) >= 3 and row[1].strip().casefold() == target_cat
+                and row[2].strip().casefold() == target_sub):
+            retry_on_quota(ws.delete_rows, i)
+            return
+
+
+def create_expense_row(label, category=_EXPENSE_CATEGORY, subcategory=_EXPENSE_SUBCATEGORY,
+                        exp_type="Operating Expense", amount=40.00, expense_date=None,
+                        recurring=False, series_id=None):
+    """A logged expense row, written directly to the Expense Log tab via
+    _append_expense_log_row() -- not through the interactive flow, since
+    this is test setup, not a test of the logging flow itself (same
+    reasoning as create_sold_unit() using inv.append_row() directly).
+    Returns the row dict _get_recent_expense_rows()/_search_expense_rows()
+    would hand back, _sheet_row included, so a test can drive the real app
+    against this Expense ID and then assert on the same row afterward."""
+    expense_date = expense_date or date(2026, 8, 1)
+    expense_id = retry_on_quota(inv._get_next_expense_id)
+    description = f"[TEST-FIXTURE · {label}] synthetic expense for Tier 2 tests"
+    retry_on_quota(inv._append_expense_log_row, expense_id, expense_date, exp_type,
+                   category, subcategory, amount, description, recurring, series_id)
+    _created_expense_ids.append(expense_id)
+    rows = retry_on_quota(inv._get_recent_expense_rows, limit=None)
+    return next(r for r in rows if r["Expense ID"] == expense_id)
+
+
+def create_recurring_registry_row(label, category=_EXPENSE_CATEGORY, subcategory=_EXPENSE_SUBCATEGORY,
+                                   exp_type="Operating Expense", amount=40.00, cadence_months=1,
+                                   logged_date=None):
+    """A Recurring Expense Registry row, written directly via
+    _append_recurring_registry_row() -- the test marker goes in
+    Description, the only free-text column this sheet has (no
+    Inventory-Notes-style field to carry it instead). Returns the row dict
+    _get_recurring_registry_rows() would hand back, _sheet_row included."""
+    logged_date = logged_date or date(2026, 8, 1)
+    description = f"[TEST-FIXTURE · {label}] synthetic registry entry for Tier 2 tests"
+    registry_id = retry_on_quota(inv._append_recurring_registry_row, category, subcategory,
+                                  description, exp_type, amount, cadence_months, logged_date)
+    _created_registry_ids.append(registry_id)
+    rows = retry_on_quota(inv._get_recurring_registry_rows)
+    return next(r for r in rows if r["Registry ID"] == registry_id)

@@ -609,3 +609,117 @@ class TestBulkIntentLog:
         monkeypatch.setattr(inv, "_BULK_INTENT_LOG_PATH", str(log_path))
         inv._check_leftover_batch_intent_log()  # must not raise
         assert not log_path.exists()
+
+
+# ── _parse_mmddyyyy ──────────────────────────────────────────────────────────
+class TestParseMmddyyyy:
+    def test_valid_date(self):
+        assert inv._parse_mmddyyyy("08-17-2026") == date(2026, 8, 17)
+
+    def test_blank_or_none_returns_none(self):
+        assert inv._parse_mmddyyyy("") is None
+        assert inv._parse_mmddyyyy(None) is None
+        assert inv._parse_mmddyyyy("   ") is None
+
+    def test_malformed_returns_none_not_raise(self):
+        assert inv._parse_mmddyyyy("not a date") is None
+        assert inv._parse_mmddyyyy("2026-08-17") is None  # wrong format (ISO, not MM-DD-YYYY)
+        assert inv._parse_mmddyyyy("13-45-2026") is None  # invalid month/day
+
+
+# ── _add_months ───────────────────────────────────────────────────────────────
+# The bug (UAT finding, Section 12): without anchor_day, a recurring series
+# first logged on the 31st permanently drifted onto the 28th the first time
+# a short February forced a one-time clamp -- real subscription billing
+# (Stripe, credit card cycles) re-attempts the original day every cycle
+# instead. These cases pin that "springs back" behavior down, not just the
+# one-time clamp itself.
+class TestAddMonths:
+    def test_plain_shift_no_clamping_needed(self):
+        assert inv._add_months(date(2026, 3, 15), 1) == date(2026, 4, 15)
+
+    def test_default_anchor_uses_the_date_s_own_day(self):
+        assert inv._add_months(date(2026, 1, 15), 1) == date(2026, 2, 15)
+
+    def test_month_end_clamps_into_a_shorter_month(self):
+        # Jan 31 + 1 month -> Feb 28 (2026 is not a leap year), not an
+        # invalid Feb 31.
+        assert inv._add_months(date(2026, 1, 31), 1) == date(2026, 2, 28)
+
+    def test_leap_year_february_clamps_to_29_not_28(self):
+        assert inv._add_months(date(2028, 1, 31), 1, anchor_day=31) == date(2028, 2, 29)
+
+    def test_year_rollover(self):
+        assert inv._add_months(date(2026, 12, 15), 1) == date(2027, 1, 15)
+
+    def test_multiple_months_at_once(self):
+        assert inv._add_months(date(2026, 1, 15), 3) == date(2026, 4, 15)
+
+    def test_anchor_day_springs_back_after_a_one_time_clamp(self):
+        # The core invariant: a billing day of 31 clamps to 28 just for the
+        # short month it lands on, then goes right back to 31 the next time
+        # a long-enough month comes around -- it must not settle onto 28
+        # permanently. Simulates two consecutive sweep cycles the way
+        # _registry_expected_date() actually chains them: each call re-
+        # anchors to the same billing_day, not to whatever day the
+        # previous result landed on.
+        first = inv._add_months(date(2026, 1, 31), 1, anchor_day=31)
+        assert first == date(2026, 2, 28)  # one-time clamp
+        second = inv._add_months(first, 1, anchor_day=31)
+        assert second == date(2026, 3, 31)  # back to 31, not stuck on 28
+
+    def test_anchor_day_overrides_the_date_s_own_day(self):
+        # d.day is 15, but anchor_day says this series actually bills on
+        # the 1st -- the result must follow anchor_day, not d.
+        assert inv._add_months(date(2026, 3, 15), 1, anchor_day=1) == date(2026, 4, 1)
+
+
+# ── _registry_expected_date ───────────────────────────────────────────────────
+class TestRegistryExpectedDate:
+    def test_normal_case_anchors_to_billing_day(self):
+        r = {"Last Reviewed Date": "01-31-2026", "Last Logged Date": "01-31-2026",
+             "Cadence (Months)": "1", "Billing Day": "31"}
+        assert inv._registry_expected_date(r) == date(2026, 2, 28)
+
+    def test_missing_cadence_returns_none(self):
+        r = {"Last Reviewed Date": "08-01-2026", "Last Logged Date": "08-01-2026",
+             "Cadence (Months)": "", "Billing Day": "1"}
+        assert inv._registry_expected_date(r) is None
+
+    def test_zero_or_negative_cadence_returns_none(self):
+        base = {"Last Reviewed Date": "08-01-2026", "Last Logged Date": "08-01-2026", "Billing Day": "1"}
+        assert inv._registry_expected_date({**base, "Cadence (Months)": "0"}) is None
+        assert inv._registry_expected_date({**base, "Cadence (Months)": "-1"}) is None
+
+    def test_no_reviewed_or_logged_date_returns_none(self):
+        r = {"Last Reviewed Date": "", "Last Logged Date": "", "Cadence (Months)": "1", "Billing Day": "1"}
+        assert inv._registry_expected_date(r) is None
+
+    def test_malformed_cadence_treated_as_zero_not_raised(self):
+        r = {"Last Reviewed Date": "08-01-2026", "Last Logged Date": "08-01-2026",
+             "Cadence (Months)": "not a number", "Billing Day": "1"}
+        assert inv._registry_expected_date(r) is None
+
+    def test_falls_back_to_last_logged_date_when_reviewed_is_blank(self):
+        # Pre-existing-column fallback: a row that predates Last Reviewed
+        # Date existing at all.
+        r = {"Last Reviewed Date": "", "Last Logged Date": "08-01-2026",
+             "Cadence (Months)": "1", "Billing Day": "1"}
+        assert inv._registry_expected_date(r) == date(2026, 9, 1)
+
+    def test_falls_back_to_reviewed_date_s_own_day_when_billing_day_is_blank(self):
+        # Pre-existing-column fallback: a row that predates Billing Day
+        # existing at all.
+        r = {"Last Reviewed Date": "08-15-2026", "Last Logged Date": "08-15-2026",
+             "Cadence (Months)": "1", "Billing Day": ""}
+        assert inv._registry_expected_date(r) == date(2026, 9, 15)
+
+    def test_malformed_billing_day_treated_as_zero_falls_back_to_reviewed_day(self):
+        r = {"Last Reviewed Date": "08-15-2026", "Last Logged Date": "08-15-2026",
+             "Cadence (Months)": "1", "Billing Day": "not a number"}
+        assert inv._registry_expected_date(r) == date(2026, 9, 15)
+
+    def test_multi_month_cadence(self):
+        r = {"Last Reviewed Date": "06-01-2026", "Last Logged Date": "06-01-2026",
+             "Cadence (Months)": "3", "Billing Day": "1"}
+        assert inv._registry_expected_date(r) == date(2026, 9, 1)
