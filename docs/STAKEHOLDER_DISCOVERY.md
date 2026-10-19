@@ -36,7 +36,7 @@ The session ran as a free-flowing conversation, not an interrogation: starting w
 ## Section 3: Customers
 *Understanding who the business sells to*
 
-16. Who is your typical customer? How would you describe her?
+16. Who is your typical customer? How would you describe them?
 17. Do you have customers who buy repeatedly? How often do they come back?
 18. Do you notice any patterns in what different types of customers buy: occasion, price range, style?
 19. How do customers usually find you: Instagram, word of mouth, WhatsApp, something else?

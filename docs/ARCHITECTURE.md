@@ -37,6 +37,8 @@ The master sheet has 41 columns. A few worth calling out:
 
 The `Unassigned` status is a deliberate design choice: a SKU can be generated in sequence with no physical unit behind it yet, preserving the numbering sequence without corrupting cost and pricing columns with placeholder data.
 
+Manage Expenses introduces three additional tabs beyond the main inventory sheet: an **Expense Log** (one row per logged expense — ID, date, type, category/subcategory, amount, description, and whether it's part of a recurring series), an **Expense Subcategories** sheet (a self-growing taxonomy: categories are fixed, subcategories are added as needed and reused via fuzzy-match dedup), and a **Recurring Expense Registry** (one row per recurring series, tracking cadence, the last logged amount and date, and whether the series is still active).
+
 ## 4. SKU Generation
 
 **Format:** `LAH-[CATEGORY CODE][SERIAL]`, e.g. `LAH-KKVSV108`.
@@ -67,7 +69,7 @@ Either path recalculates Gross Profit, Markup %, and Margin % automatically, and
 8. **Cancel a Sale**: reverse a sale, restore the unit to `Available`, track any pending refund
 9. **Manage Expenses**: log Operating Expenses and Capital Expenditures, individually or as a recurring series, with a self-growing subcategory taxonomy and an automatic sweep surfacing overdue recurring entries every time the operation opens
 10. **View Customer Insights**: lifetime and period-scoped purchase history, spend, and outstanding balance per customer
-11. **Generate Report**: a full PDF business-intelligence report spanning financial performance, customer and sales behavior, and inventory and supply-chain health, capped with a structured Claude API executive summary and targeted recommendations, plus optional email delivery
+11. **Generate Report**: a full PDF business-intelligence report spanning financial performance, operating margin, customer and sales behavior, and inventory and supply-chain health, capped with a structured Claude API executive summary and targeted recommendations, plus optional email delivery
 12. **Generate Product Description**: a multi-turn Claude API conversation generates descriptions across the business's sales channels, grounded in the business's own brand voice and per-unit detail, with a sibling-sync mechanism that keeps a unit's other channel descriptions consistent with a corrected fact.
 
 Every write operation follows the same core shape: look up, validate status/eligibility, collect fields one at a time, show a full confirmation summary, require explicit confirmation, write, confirm success. Nothing is written to the sheet without that final confirmation step. Generate Product Description follows this same discipline at its write step, though reaching that confirmation is richer than it is for the other 11 operations, since it's producing a draft to react to, not a fixed set of values to enter.

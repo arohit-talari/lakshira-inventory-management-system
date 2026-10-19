@@ -38,7 +38,7 @@ Before any recommendation was made, a structured stakeholder discovery and requi
 |---|---|
 | **Method** | 7-section discovery and requirements session, run as a conversation, not a script |
 | **Scope** | 45 questions across current-state workflow, pain points, customers, suppliers, financials, growth goals, and current data and tools |
-| **Audit** | A formal data-quality audit logging 44 specific pre-existing issues, including duplicate SKUs and missing cost/pricing data, before a line of the new system was built |
+| **Audit** | A formal data-quality audit that categorized recurring problems by type and severity, surfacing specific risks like duplicate SKUs and missing cost/pricing data, before a line of the new system was built |
 | **Output** | Findings that directly shaped the data model, the analytics built, and the 12 operations scoped into **Operational System** |
 | **Impact** | Self-reported inventory count was found to understate actual holdings by roughly half once every source was located |
 
@@ -53,7 +53,7 @@ Inventory tracking was dispersed across 12 separate workbooks with no single sou
 | **Before** | 12 fragmented workbooks, no standardized categories, weave types, suppliers, or pricing method |
 | **Built** | One unified master sheet with standardized reference tables, data validation, conditional formatting, and formula-driven fields |
 | **Documentation** | A full data dictionary and category/supplier reference tables, produced as standalone artifacts |
-| **Impact** | Correcting manual pricing errors (found in roughly 65% of cases) recovered several thousand dollars in under-cost inventory |
+| **Impact** | Correcting manual pricing errors (found in roughly 65% of cases) recovered several thousand dollars in under-cost inventory; building the unified master sheet also surfaced that a large share of historical sales had no customer information recorded |
 
 <h3 align="left">3. Data Warehouse</h3>
 
@@ -62,7 +62,7 @@ A unified master sheet centralized the data needed to assess the business's heal
 | | |
 |---|---|
 | **Pipeline** | Extract (Google Sheets API) → Transform (pandas) → Load (MySQL on AWS RDS) |
-| **Schema** | 5 normalized tables: Category, Customer, Inventory, Supplier, Transaction |
+| **Schema** | 7 normalized tables: Category, Customer, Expense, Expense Subcategory, Inventory, Supplier, Transaction |
 | **Scale** | 1,540 inventory records · 508 transactions · 58 customers · 19 suppliers |
 | **Status** | Built and running; ETL codebase not yet published as a separate repository |
 | **Impact** | Margin by weave type and supplier, or repeat-customer revenue share, now take seconds instead of hours of manual workbook review |
@@ -83,7 +83,7 @@ flowchart TD
     end
 
     subgraph BI["`**Business Intelligence**`"]
-        D["`3-Dashboard<br>Tableau Workbook`"]
+        D["`3-View<br>Tableau Workbook`"]
     end
 
     subgraph EDA["`**Exploratory Data Analysis**`"]
@@ -104,11 +104,11 @@ flowchart TD
 
 <h3 align="left">4. Business Intelligence and Analytics</h3>
 
-Once the warehouse was built and a string of descriptive and diagnostic queries had been run against it, it became clear which north-star KPIs and visualizations needed a permanent home to give the owner visibility that never existed before. A 3-Dashboard Tableau Workbook was built to cover three core areas of the business: Business Overview, Inventory & Operations, and Customer Intelligence. The same retail-specific analytical frameworks feed both the Tableau layer and dedicated tabs on the master sheet, so the insight isn't locked behind one tool.
+Once the warehouse was built and a string of descriptive and diagnostic queries had been run against it, it became clear which north-star KPIs and visualizations needed a permanent home to give the owner visibility that never existed before. A 3-View Tableau Workbook was built to cover three core areas of the business: Business Overview, Inventory & Operations, and Customer Intelligence. The same retail-specific analytical frameworks feed both the Tableau layer and dedicated tabs on the master sheet, so the insight isn't locked behind one tool.
 
 | | |
 |---|---|
-| **Dashboards** | Business Overview · Inventory & Operations · Customer Intelligence |
+| **Views** | Business Overview · Inventory & Operations · Customer Intelligence |
 | **Analytics** | Sell-Through Rate · Dead Stock/Markdown · Inventory Health and Turnover · Supplier Performance · Pricing Effectiveness · Margin-Bucket Distribution |
 | **Status** | Built and in use privately with real data; a sanitized public demo, built on pattern-preserving synthetic data, is shown in [Business Intelligence](docs/BUSINESS_INTELLIGENCE.md) |
 | **Impact** | Visibility into inventory-aging risk directly changed intake behavior, as the following month became the business's best on record among sales with a confirmed date |

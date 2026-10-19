@@ -66,6 +66,7 @@ One specific risk that discipline caught: because more than one person can act o
 - A payment-tracking flow that broke on realistic transaction amounts (any outstanding balance of $1,000 or more), a defect invisible until tested against real business scale
 - A discount-removal flow that didn't re-validate pricing after the discount was reversed
 - A payment-status option offered in a scenario where it was mathematically impossible to fulfill
+- A newly built Operating Margin report section disconnected from its own underlying expense data, so the section never rendered even when real expense data existed
 
 ## Lean Six Sigma: DMAIC Applied to Defect Management
 
@@ -102,7 +103,7 @@ cp .env.example .env   # fill in your own values
 # Google account's OAuth client secret (oauth_client_secret.json, same
 # directory) and DRIVE_PHOTOS_ROOT_ID set in .env -- service accounts have
 # no Drive storage quota of their own, so photo upload runs as OAuth user
-# delegation instead. Not required for the other 10 operations.
+# delegation instead. Not required for the other 11 operations.
 cd ..
 
 python3 inventory_management_system/inventory.py
