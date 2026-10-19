@@ -2343,7 +2343,7 @@ def select_country():
     ]
 
     while True:
-        raw = input(f"\n\001\033[1m\002Type to search by country name (or press Enter to go back):\001\033[0m\002 {_ANSWER_COLOR}").strip()
+        raw = input(f"\n\001\033[1m\002Customer Country (type to search, or press Enter to go back):\001\033[0m\002 {_ANSWER_COLOR}").strip()
         print("\033[0m", end="")
         if not raw:
             return None, None
@@ -3129,6 +3129,7 @@ def enter_new_customer(prefill_name="", raw_rows=None):
                                 return picked
                             # declined — continue with new entry below
 
+        print("\n--- \033[1;38;5;124mCUSTOMER DETAILS\033[0m ---")
         country_name, dial_code = select_country()
         if country_name is None:
             continue  # back to name prompt
@@ -3468,6 +3469,7 @@ def _add_single_unit():
         return
 
     # Step 3: Remaining fields
+    print("\n--- \033[1;38;5;124mSOURCING & COST DETAILS\033[0m ---")
     source_sheet = ask_text("Source Sheet + Tab (e.g. 'Sheet1 - Tab2'):", blank_message="This field cannot be left blank. Please enter a sheet reference.")
     supplier = select_or_add_supplier()
     date_acquired = ask_date("Date Acquired", not_future=True,
@@ -4195,6 +4197,8 @@ def _record_single_sale():
               "Date Sold against it. Please correct Date Acquired on the sheet before recording this sale.")
         print("\nSale cancelled. Returning to Main Menu.")
         return
+
+    print("\n--- \033[1;38;5;124mSALE DETAILS\033[0m ---")
     date_sold = ask_date("Date Sold", not_future=True, not_before=date_acquired,
                   future_msg="Sales cannot be recorded in the future. Please enter a current or past date.")
     date_sold_str = date_sold.strftime("%m-%d-%Y")

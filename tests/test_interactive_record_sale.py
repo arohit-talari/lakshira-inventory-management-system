@@ -98,13 +98,16 @@ def _new_customer_flow(child, label, phone=None):
     # Fuzzy name matching can offer an existing customer here if this name
     # is close to one already on the sheet -- decline it so this always
     # proceeds as genuinely new.
-    index = child.expect(["Proceed with an existing customer\\?", "search by country name"])
+    index = child.expect(["Proceed with an existing customer\\?", "Customer Country"])
     if index == 0:
         child.sendline("no")
-        child.expect("search by country name")
+        child.expect("Customer Country")
     child.sendline("United States")
-    child.expect("Enter the number of your choice")
-    child.sendline("1")
+    # Arrow-key select, not a numbered list -- "United States" sorts first
+    # among startswith matches (ahead of "United States Minor Outlying
+    # Islands"), so accepting the default choice is always correct here.
+    child.expect("Which country did you mean")
+    child.send(ENTER)
     child.expect("Customer Phone")
     child.sendline(phone)
     child.expect("Customer Email")
