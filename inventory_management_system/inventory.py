@@ -3671,6 +3671,10 @@ def _add_single_unit():
 
     print(f"\n\033[38;5;202m✓ {sku} added successfully.\033[0m")
 
+    if ask_yes_no("Add another unit?"):
+        return _add_single_unit()
+    print("\nReturning to Main Menu.")
+
 
 def _add_bulk_units(batch_size):
     """
@@ -4493,6 +4497,10 @@ def _record_single_sale():
     purchase_count = count_customer_purchases(customer_name, customer_country_code, customer_phone, customer_email)
     print(f"\n{customer_name} now has {purchase_count} purchase{'s' if purchase_count != 1 else ''} on record.")
 
+    if ask_yes_no("Record another sale?"):
+        return _record_single_sale()
+    print("\nReturning to Main Menu.")
+
 
 def _record_bulk_sale(batch_size):
     """
@@ -4924,7 +4932,10 @@ def _record_bulk_sale(batch_size):
 
 def reprice_unit():
     print("\n--- \033[1;38;5;124mREPRICE A UNIT\033[0m ---")
+    _reprice_single_unit()
 
+
+def _reprice_single_unit():
     # Steps 1–2: SKU lookup + confirmation (loops on wrong unit or invalid status)
     def _pct(val):
         try:
@@ -5106,6 +5117,10 @@ def reprice_unit():
     update_row(row_index, updates)
     print(f"\n\033[38;5;202m✓ {sku} repriced: ${old_selling_price:,.2f} → ${pricing['selling_price_usd']:,.2f}\033[0m")
 
+    if ask_yes_no("Reprice another unit?"):
+        return _reprice_single_unit()
+    print("\nReturning to Main Menu.")
+
 
 def edit_inventory_details():
     """
@@ -5119,7 +5134,10 @@ def edit_inventory_details():
     to do that exact job.
     """
     print("\n--- \033[1;38;5;124mEDIT INVENTORY DETAILS\033[0m ---")
+    _edit_single_unit()
 
+
+def _edit_single_unit():
     def _pct(val):
         try:
             return float(str(val).replace("%", "").replace(",", "").strip())
@@ -5838,6 +5856,10 @@ def edit_inventory_details():
 
             update_row(row_index, field_changed)
             print(f"\n\033[38;5;202m✓ {sku} updated successfully.\033[0m")
+
+            if ask_yes_no("Edit another unit?"):
+                return _edit_single_unit()
+            print("\nReturning to Main Menu.")
             return
 
         if action == "Edit more fields":
@@ -6161,8 +6183,10 @@ def discount_simulator():
                 if ask_yes_no("Adjust selling price or markup?"):
                     restart_pricing = True
 
-            print("\nReturning to Main Menu.")
-            return
+            # Falls through to the sub-menu loop's top (same as Mode 1's own
+            # "Look up a different unit?" decline) rather than hard-returning,
+            # so Mode 2 can also run a second hypothetical scenario -- or
+            # switch to Mode 1 -- without fully re-entering the operation.
 
 
 def _resolve_outstanding_conflict(sku, selected_outstanding, fresh_outstanding):
@@ -6879,7 +6903,10 @@ def _process_bulk_outstanding_payment(selected_rows):
 
 def cancel_sale():
     print("\n--- \033[1;38;5;124mCANCEL A SALE\033[0m ---")
+    _cancel_single_sale()
 
+
+def _cancel_single_sale():
     # Pending refund sweep — surfaces unresolved refunds before cancellation flow
     _all_rows     = get_all_rows()
     _refund_sep   = f"\033[2m{'—' * 50}\033[0m"
@@ -7164,10 +7191,17 @@ def cancel_sale():
     update_row(row_index, updates)
     print(f"\n\033[38;5;202m✓ {sku} sale cancelled. Unit restored to Available.\033[0m")
 
+    if ask_yes_no("Cancel another sale?"):
+        return _cancel_single_sale()
+    print("\nReturning to Main Menu.")
+
 
 def manage_reservation():
     print("\n--- \033[1;38;5;124mMANAGE A RESERVATION\033[0m ---")
+    _manage_single_reservation()
 
+
+def _manage_single_reservation():
     # Overdue reservation sweep — surfaces expired holds before SKU entry
     _all_rows = get_all_rows()
     _overdue  = []
@@ -7368,6 +7402,11 @@ def manage_reservation():
         })
         print(f"\n\033[38;5;202m✓ {sku} reserved for {reserver_name}.\033[0m")
 
+        if ask_yes_no("Manage another reservation?"):
+            return _manage_single_reservation()
+        print("\nReturning to Main Menu.")
+        return
+
     # Branch: Reserved → Available
     else:
         reserved_date_display = row.get("Reserved Date", "").strip()
@@ -7449,6 +7488,10 @@ def manage_reservation():
             "Inventory Notes": _normalize_inventory_notes(final_notes),
         })
         print(f"\n\033[38;5;202m✓ {sku} reservation released. Unit restored to Available.\033[0m")
+
+        if ask_yes_no("Manage another reservation?"):
+            return _manage_single_reservation()
+        print("\nReturning to Main Menu.")
 
 
 def _pick_report_year(today, years, prompt="Select a year:"):
@@ -8014,7 +8057,10 @@ def generate_product_description():
         return
 
     print("\n--- \033[1;38;5;124mGENERATE PRODUCT DESCRIPTION\033[0m ---")
+    _generate_single_product_description(dg)
 
+
+def _generate_single_product_description(dg):
     # Step 1: SKU lookup + confirmation (same shape as reprice_unit())
     while True:
         sku = ask_text("SKU:", blank_message="SKU cannot be left blank. Please enter a valid SKU.")
@@ -8953,6 +8999,10 @@ def generate_product_description():
         _changed_fields.append(("Technical Specs", old_tech, tech_specs))
 
     _offer_sibling_sync(_changed_fields)
+
+    if ask_yes_no("Generate another description?"):
+        return _generate_single_product_description(dg)
+    print("\nReturning to Main Menu.")
 
 
 # =============================================================================

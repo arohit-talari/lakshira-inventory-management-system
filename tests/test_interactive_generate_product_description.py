@@ -52,7 +52,7 @@ def _check_mode():
 
 
 def _enter_op11(child, sku):
-    child.sendline("11")
+    child.sendline("12")
     child.expect("SKU:")
     child.sendline(sku)
     child.expect("Is this the correct unit\\?")
@@ -135,7 +135,7 @@ class TestStatusRejection:
         unit = fd.create_fresh_available_unit(f"OP11-BLOCKED-{status[:4]}", status=status)
         child = spawn_app()
         try:
-            child.sendline("11")
+            child.sendline("12")
             child.expect("SKU:")
             child.sendline(unit["SKU"])
             text = expect_clean(child, "SKU:")

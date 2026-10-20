@@ -362,7 +362,7 @@ class TestMode2CustomFigures:
             assert "$25,000" in text or "25,000" in text  # INR total cost display
 
             child.send(ENTER)  # "Enter a markup percentage"
-            child.expect("Markup Percentage:")
+            child.expect("Markup Percentage")
             child.sendline("50")
 
             text = expect_clean(child, "Discount to simulate:")
@@ -377,7 +377,10 @@ class TestMode2CustomFigures:
             child.sendline("no")
             child.expect("Adjust selling price or markup\\?")
             child.sendline("no")
-            child.expect("Returning to Main Menu")
+            # Falls back to the sub-menu (not a hard return to Main Menu) --
+            # same loop-back Mode 1 already had via "Look up a different
+            # unit?", now symmetric across both modes.
+            child.expect("Select an option:")
         finally:
             close(child)
 
@@ -422,6 +425,6 @@ class TestMode2CustomFigures:
             child.send(DOWN)
             child.send(DOWN)
             child.send(ENTER)  # "Discard & exit"
-            child.expect("Returning to Main Menu")
+            child.expect("Select an option:")
         finally:
             close(child)
