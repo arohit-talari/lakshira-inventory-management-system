@@ -223,8 +223,10 @@ class TestSingleUnitCancellationPaths:
             child.sendline("")
             child.expect("Write this to the master sheet\\?")
             child.sendline("no")
-            text = expect_clean(child, "Returning to Main Menu")
+            text = expect_clean(child, "Start over\\?")
             assert "Add cancelled" in text
+            child.sendline("no")
+            child.expect("Returning to Main Menu")
         finally:
             close(child)
 

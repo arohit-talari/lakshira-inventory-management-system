@@ -186,6 +186,8 @@ class TestPendingRefundSweep:
             child.sendline("pytest sweep-bystander decline")
             child.expect("Cancel this sale and restore the unit to Available\\?")
             child.sendline("no")
+            expect_clean(child, "Start over\\?")
+            child.sendline("no")
             expect_clean(child, "Returning to Main Menu")
         finally:
             close(child)
@@ -234,8 +236,10 @@ class TestCancellation:
             child.sendline("pytest decline reason")
             child.expect("Cancel this sale and restore the unit to Available\\?")
             child.sendline("no")
-            text = expect_clean(child, "Returning to Main Menu")
+            text = expect_clean(child, "Start over\\?")
             assert "Cancellation discarded" in text
+            child.sendline("no")
+            child.expect("Returning to Main Menu")
         finally:
             close(child)
 

@@ -3612,7 +3612,10 @@ def _add_single_unit():
 
     confirmed = ask_yes_no("Write this to the master sheet?")
     if not confirmed:
-        print("\nAdd cancelled. Returning to Main Menu.")
+        print("\nAdd cancelled.")
+        if ask_yes_no("Start over?"):
+            return _add_single_unit()
+        print("\nReturning to Main Menu.")
         return
 
     # Step 11: Build row data
@@ -4395,7 +4398,10 @@ def _record_single_sale():
 
     confirmed = ask_yes_no("Write this sale to the master sheet?")
     if not confirmed:
-        print("\nSale cancelled. Returning to Main Menu.")
+        print("\nSale cancelled.")
+        if ask_yes_no("Start over?"):
+            return _record_single_sale()
+        print("\nReturning to Main Menu.")
         return
 
     updates = {
@@ -5082,7 +5088,10 @@ def _reprice_single_unit():
 
     confirmed = ask_yes_no("Write this reprice to the master sheet?")
     if not confirmed:
-        print("\nReprice cancelled. Returning to Main Menu.")
+        print("\nReprice cancelled.")
+        if ask_yes_no("Start over?"):
+            return _reprice_single_unit()
+        print("\nReturning to Main Menu.")
         return
 
     updates = {
@@ -5867,7 +5876,10 @@ def _edit_single_unit():
             _collect_edits()
             continue
 
-        print("\nEdit cancelled. Existing details retained. Returning to Main Menu.")
+        print("\nEdit cancelled. Existing details retained.")
+        if ask_yes_no("Start over?"):
+            return _edit_single_unit()
+        print("\nReturning to Main Menu.")
         return
 
 
@@ -7133,7 +7145,10 @@ def _cancel_single_sale():
 
     confirmed = ask_yes_no("Cancel this sale and restore the unit to Available?")
     if not confirmed:
-        print("\nCancellation discarded. Returning to Main Menu.")
+        print("\nCancellation discarded.")
+        if ask_yes_no("Start over?"):
+            return _cancel_single_sale()
+        print("\nReturning to Main Menu.")
         return
 
     updates = {
@@ -7387,7 +7402,10 @@ def _manage_single_reservation():
 
         confirmed = ask_yes_no("Mark this unit as Reserved?")
         if not confirmed:
-            print("\nReservation cancelled. Returning to Main Menu.")
+            print("\nReservation cancelled.")
+            if ask_yes_no("Start over?"):
+                return _manage_single_reservation()
+            print("\nReturning to Main Menu.")
             return
 
         if not _status_unchanged(row_index, current_status):
@@ -7468,7 +7486,10 @@ def _manage_single_reservation():
 
         confirmed = ask_yes_no("Release this reservation?")
         if not confirmed:
-            print("\nRelease cancelled. Returning to Main Menu.")
+            print("\nRelease cancelled.")
+            if ask_yes_no("Start over?"):
+                return _manage_single_reservation()
+            print("\nReturning to Main Menu.")
             return
 
         if not _status_unchanged(row_index, current_status):
@@ -8898,6 +8919,9 @@ def _generate_single_product_description(dg):
 
     if not ask_yes_no("Write this description to the master sheet?"):
         print("\nCancelled. Nothing was written.")
+        if ask_yes_no("Start over?"):
+            return _generate_single_product_description(dg)
+        print("\nReturning to Main Menu.")
         return
 
     # Concurrency check, scoped to just this channel -- not the whole

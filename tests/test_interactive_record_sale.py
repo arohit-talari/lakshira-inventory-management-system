@@ -323,8 +323,10 @@ class TestCancellation:
             child.send(ENTER)
             child.expect("Write this sale to the master sheet\\?")
             child.sendline("no")
-            text = expect_clean(child, "Returning to Main Menu")
+            text = expect_clean(child, "Start over\\?")
             assert "Sale cancelled" in text
+            child.sendline("no")
+            child.expect("Returning to Main Menu")
         finally:
             close(child)
 

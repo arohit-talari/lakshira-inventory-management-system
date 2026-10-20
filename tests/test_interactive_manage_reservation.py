@@ -151,8 +151,10 @@ class TestCancellationPaths:
             child.sendline("")
             child.expect("Mark this unit as Reserved\\?")
             child.sendline("no")
-            text = expect_clean(child, "Returning to Main Menu")
+            text = expect_clean(child, "Start over\\?")
             assert "Reservation cancelled" in text
+            child.sendline("no")
+            child.expect("Returning to Main Menu")
         finally:
             close(child)
 
@@ -168,8 +170,10 @@ class TestCancellationPaths:
             child.sendline("")
             child.expect("Release this reservation\\?")
             child.sendline("no")
-            text = expect_clean(child, "Returning to Main Menu")
+            text = expect_clean(child, "Start over\\?")
             assert "Release cancelled" in text
+            child.sendline("no")
+            child.expect("Returning to Main Menu")
         finally:
             close(child)
 

@@ -117,8 +117,10 @@ class TestRecalibrateLoop:
             child.send(ENTER)
             child.expect("Write this reprice to the master sheet\\?")
             child.sendline("no")
-            text = expect_clean(child, "Returning to Main Menu")
+            text = expect_clean(child, "Start over\\?")
             assert "Reprice cancelled" in text
+            child.sendline("no")
+            child.expect("Returning to Main Menu")
         finally:
             close(child)
 
@@ -152,8 +154,10 @@ class TestCancellationPaths:
             child.send(ENTER)
             child.expect("Write this reprice to the master sheet\\?")
             child.sendline("no")
-            text = expect_clean(child, "Returning to Main Menu")
+            text = expect_clean(child, "Start over\\?")
             assert "Reprice cancelled" in text
+            child.sendline("no")
+            child.expect("Returning to Main Menu")
         finally:
             close(child)
 
