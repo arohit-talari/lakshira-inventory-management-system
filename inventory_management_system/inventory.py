@@ -1368,7 +1368,7 @@ def resolve_sku(category_code, weave_type, batch_reserved_skus=None):
                     value="Generate a new SKU",
                 ),
             ],
-            qmark="Select one, or generate a new SKU:",
+            qmark="\nSelect one, or generate a new SKU:",
             instruction=" ",
             style=_MENU_STYLE,
         ).unsafe_ask()
